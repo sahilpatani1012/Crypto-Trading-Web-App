@@ -20,7 +20,11 @@ services:
     # Built from the repo root: this is an npm workspace, so dependencies hoist to
     # the root node_modules and the protocol package is only resolvable from there.
     rootDir: .
-    buildCommand: npm ci && npm run build --workspace @cta/server
+    # `--include=dev` is load-bearing, not decoration. NODE_ENV is set to
+    # production below, and under that npm omits devDependencies — which is where
+    # tsup and tsx live. Without this flag the install succeeds, the build then
+    # fails with "tsup: not found", and the cause is several lines above the error.
+    buildCommand: npm ci --include=dev && npm run build --workspace @cta/server
     startCommand: node apps/server/dist/index.js
 
     # Render restarts the instance if this stops answering. It also makes a failed
