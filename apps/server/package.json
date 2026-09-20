@@ -1,0 +1,25 @@
+{
+  "name": "@cta/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic market-data backend: deterministic simulation, REST snapshots, and per-client adaptive WebSocket delivery.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cta/protocol": "*",
+    "@fastify/cors": "^11.3.0",
+    "fastify": "^5.12.5",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.13"
+  }
+}
