@@ -140,13 +140,13 @@ export function tierScore(latencyMs: number, jitterMs: number): number {
  */
 export const TIER_THRESHOLDS = {
   /** full -> degraded */
-  demoteFromFull: 150,
+  demoteFromFull: 250,
   /** degraded -> full */
-  promoteToFull: 100,
+  promoteToFull: 180,
   /** degraded -> minimal */
-  demoteFromDegraded: 400,
+  demoteFromDegraded: 600,
   /** minimal -> degraded */
-  promoteToDegraded: 300,
+  promoteToDegraded: 450,
 } as const;
 
 /**
