@@ -1,0 +1,43 @@
+# Render blueprint for the market-data backend.
+#
+# The backend cannot live on Vercel: a WebSocket needs a process that outlives a
+# request and holds per-connection state, and Vercel's serverless functions are
+# stateless with a hard duration cap. Render runs a long-lived container, which is
+# what a socket server actually requires.
+#
+# Deploy order matters, because each service needs the other's URL:
+#   1. Deploy this with CORS_ORIGINS unset (defaults to "*").
+#   2. Deploy the web app on Vercel pointing at the URL Render gives back.
+#   3. Set CORS_ORIGINS here to the Vercel URL and redeploy.
+
+services:
+  - type: web
+    name: cta-server
+    runtime: node
+    plan: free
+    region: oregon
+
+    # Built from the repo root: this is an npm workspace, so dependencies hoist to
+    # the root node_modules and the protocol package is only resolvable from there.
+    rootDir: .
+    buildCommand: npm ci && npm run build --workspace @cta/server
+    startCommand: node apps/server/dist/index.js
+
+    # Render restarts the instance if this stops answering. It also makes a failed
+    # deploy fail loudly at deploy time rather than silently serving errors.
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # Fixing the seed means the deployed instance replays the same price path on
+      # every restart, which is what makes a recorded demo reproducible (D-012).
+      - key: MARKET_SEED
+        value: "1337"
+      # Set to the Vercel URL after step 2. Left unset it defaults to "*", which is
+      # fine for a first deploy and wrong to leave in place.
+      - key: CORS_ORIGINS
+        sync: false
+      # PORT is injected by Render; the server reads it from the environment.
