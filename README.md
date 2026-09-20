@@ -1,5 +1,8 @@
 # Adaptive Crypto Trading Terminal
 
+**Live:** [crypto-trading-web-app.netlify.app](https://crypto-trading-web-app.netlify.app/)
+· **API:** [crypto-trading-web-app.onrender.com](https://crypto-trading-web-app.onrender.com/health)
+
 A simulated single-symbol cryptocurrency market with **per-connection adaptive chart
 delivery**. The backend generates a deterministic trade stream, maintains an order
 book, and computes OHLCV candles. Every connected client reports its own latency and
@@ -152,13 +155,14 @@ means "add this much". That replace semantic is what makes coalescing safe.
 
 ## Deployment
 
-The two services deploy separately, and **they cannot be swapped**: a WebSocket needs a
-process that outlives a request and holds per-connection state, which Vercel's
-stateless, duration-capped serverless functions fundamentally cannot do.
+The two services deploy separately, and **the backend cannot go on a serverless host**:
+a WebSocket needs a process that outlives a request and holds per-connection state —
+the subscription, the tier state machine, its timers. Netlify's and Vercel's functions
+are stateless with a hard duration cap, so they fundamentally cannot hold one.
 
 | | Platform | Why |
 |---|---|---|
-| `apps/web` | Vercel | Static shell plus serverless — a good fit |
+| `apps/web` | Netlify | Static shell plus serverless — a good fit (Vercel works identically) |
 | `apps/server` | Render | Long-lived container, which a socket server requires |
 
 Each needs the other's URL, so deploy in this order:
@@ -188,20 +192,30 @@ Leave `CORS_ORIGINS` unset for now; it defaults to `*`. Verify at `/health`.
 > the only service deployed as a long-running process, which is why `npm start` at
 > the repo root means "run the backend".
 
-**2. Frontend → Vercel**
-Add New → Project → this repo, then **set Root Directory to `apps/web`** — without it
-the workspace will not resolve. Environment variables:
+**2. Frontend → Netlify** (or Vercel — the steps are the same)
+
+Import the repo and **set the base directory to `apps/web`** — without it the
+workspace will not resolve. Then add environment variables:
 
 ```
 NEXT_PUBLIC_API_URL = https://<your-render-service>.onrender.com
 NEXT_PUBLIC_WS_URL  = wss://<your-render-service>.onrender.com/ws
 ```
 
-Note `wss://`, not `ws://`. A browser on an HTTPS page refuses to open an insecure
-WebSocket, and the failure is quiet.
+Two things that are easy to get wrong here:
+
+- It is `wss://`, not `ws://`. A browser on an HTTPS page refuses to open an insecure
+  WebSocket, and the failure is quiet. `assertSecureTransport()` in
+  `apps/web/src/lib/config.ts` turns that into a console error rather than a mystery.
+- `NEXT_PUBLIC_*` variables are **inlined at build time**, not read at runtime. Adding
+  or changing one therefore requires a fresh build — on Netlify that means *Clear
+  cache and deploy site*, not a plain redeploy, which would just re-serve the previous
+  artifact with the old values compiled in.
 
 **3. Lock CORS down**
-Back on Render, set `CORS_ORIGINS` to the Vercel URL and redeploy.
+Back on Render, set `CORS_ORIGINS` to the frontend URL and redeploy. Until this is
+done the backend accepts any origin, and the origin check in the WebSocket upgrade
+handler is effectively disabled.
 
 > **Render free tier sleeps after 15 minutes of inactivity** and takes roughly 30–50
 > seconds to wake. The first load after a quiet period will look slow. This is the
