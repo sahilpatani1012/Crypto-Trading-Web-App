@@ -1,32 +1,27 @@
-import { SYMBOL, INTERVAL_IDS, TIERS, TIER_TARGET_HZ } from '@cta/protocol';
+import { SYMBOL } from '@cta/protocol';
+import { ConnectionProbe } from '@/components/ConnectionProbe';
 
 /**
- * S0 scaffold. This page stays a Server Component; the live panel arrives in S4
- * behind a single `'use client'` boundary.
+ * S2 scaffold.
+ *
+ * This page is a Server Component and stays one (D-002): the heading and chrome
+ * ship no JavaScript, and the `'use client'` boundary sits on `ConnectionProbe`
+ * alone. The real trading screen replaces the probe in S4 through S7 while keeping
+ * that same shape.
  */
 export default function Page() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-6 px-4 py-16">
-      <div>
-        <p className="text-xs uppercase tracking-[0.2em] text-ink-faint">Scaffold</p>
+    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-8 px-4 py-16">
+      <header>
+        <p className="text-xs uppercase tracking-[0.2em] text-ink-faint">Transport check</p>
         <h1 className="mt-2 text-3xl font-semibold text-ink">{SYMBOL}</h1>
         <p className="mt-2 text-sm text-ink-dim">
-          Workspace resolves and the shared protocol contract imports cleanly on both sides.
+          REST snapshots and a live WebSocket feed, served from one process. The trading UI
+          arrives in later slices.
         </p>
-      </div>
+      </header>
 
-      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-line-soft bg-surface-1 p-4">
-          <dt className="text-xs uppercase tracking-wider text-ink-faint">Intervals</dt>
-          <dd className="num mt-1 text-ink">{INTERVAL_IDS.join(' · ')}</dd>
-        </div>
-        <div className="rounded-lg border border-line-soft bg-surface-1 p-4">
-          <dt className="text-xs uppercase tracking-wider text-ink-faint">Delivery tiers</dt>
-          <dd className="num mt-1 text-ink">
-            {TIERS.map((tier) => `${tier} ${TIER_TARGET_HZ[tier]}Hz`).join(' · ')}
-          </dd>
-        </div>
-      </dl>
+      <ConnectionProbe />
     </main>
   );
 }
