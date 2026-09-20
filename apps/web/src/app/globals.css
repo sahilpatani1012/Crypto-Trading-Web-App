@@ -1,0 +1,80 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. A trading screen is read for long stretches in low light, so the
+ * palette is dark-first with a small number of semantic colours: one for up, one
+ * for down, one for "this data is stale and you should not trust it".
+ */
+@theme {
+  --color-surface-0: #0b0e13;
+  --color-surface-1: #12161f;
+  --color-surface-2: #1a1f2b;
+  --color-surface-3: #232a38;
+
+  --color-line: #2a3242;
+  --color-line-soft: #1e2532;
+
+  --color-ink: #e6eaf2;
+  --color-ink-dim: #99a3b5;
+  --color-ink-faint: #5d6778;
+
+  --color-up: #16c784;
+  --color-up-soft: #16c78426;
+  --color-down: #ea3943;
+  --color-down-soft: #ea394326;
+
+  --color-accent: #4c8dff;
+  --color-warn: #f0b90b;
+  --color-stale: #f0b90b;
+
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Menlo, monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-surface-0);
+  color: var(--color-ink);
+  font-family: var(--font-sans, system-ui, -apple-system, 'Segoe UI', sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Numbers in a trading UI must not reflow as digits change, or the whole column
+ * jitters at the update rate. Tabular figures fix each glyph to the same advance
+ * width, which is why every price and quantity uses this class.
+ */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+/* Respect a user's reduced-motion preference for the flash animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-line);
+}
