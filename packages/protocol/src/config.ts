@@ -62,8 +62,16 @@ export function isIntervalId(value: unknown): value is IntervalId {
 /** How many candles per interval the server retains and will serve as history. */
 export const HISTORY_LIMIT = 600;
 
-/** How far back `warmup()` generates history at startup, per interval. */
-export const WARMUP_BARS = 400;
+/**
+ * How much history `warmup()` generates at startup, by running the live tick loop
+ * over a synthetic past (D-012).
+ *
+ * One hour is 72,000 engine ticks, which costs a second or so of boot time. It
+ * fills the 1s and 5s aggregators to their retention limit and gives the 1m chart
+ * sixty bars — enough to look like a real chart without making the container slow
+ * to become healthy, which matters on a platform that cold-starts.
+ */
+export const WARMUP_MS = 60 * 60 * 1_000;
 
 // ---------------------------------------------------------------------------
 // Order book
