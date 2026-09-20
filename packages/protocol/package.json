@@ -1,0 +1,14 @@
+{
+  "name": "@cta/protocol",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared wire contract: zod schemas, inferred types, and tuning constants for the REST and WebSocket APIs.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

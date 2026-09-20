@@ -1,0 +1,29 @@
+{
+  "name": "crypto-trading-web-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev --workspace @cta/server",
+    "dev:web": "npm run dev --workspace @cta/web",
+    "build": "npm run build --workspace @cta/server && npm run build --workspace @cta/web",
+    "start:server": "npm run start --workspace @cta/server",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p packages/protocol && tsc --noEmit -p apps/server && tsc --noEmit -p apps/web"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "concurrently": "^9.2.1",
+    "typescript": "5.9.3",
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

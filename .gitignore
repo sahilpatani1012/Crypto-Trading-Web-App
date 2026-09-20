@@ -1,0 +1,28 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+
+*.log
+npm-debug.log*
+
+.env
+.env.local
+.env*.local
+
+.DS_Store
+Thumbs.db
+
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+coverage/
+.vitest/
+*.tsbuildinfo
+.vercel
+
+# Internal working docs (architecture notes, ADRs, build plan, study material).
+# Not part of the submission; README.md at the repo root is.
+docs/
