@@ -12,6 +12,8 @@
     "dev:server": "npm run dev --workspace @cta/server",
     "dev:web": "npm run dev --workspace @cta/web",
     "build": "npm run build --workspace @cta/server && npm run build --workspace @cta/web",
+    "build:server": "npm run build --workspace @cta/server",
+    "start": "node apps/server/dist/index.js",
     "start:server": "npm run start --workspace @cta/server",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -164,8 +164,29 @@ stateless, duration-capped serverless functions fundamentally cannot do.
 Each needs the other's URL, so deploy in this order:
 
 **1. Backend → Render**
-New → Blueprint → select this repo. `render.yaml` is picked up automatically. Leave
-`CORS_ORIGINS` unset for now; it defaults to `*`. Verify at `/health`.
+
+New → **Blueprint** → select this repo. `render.yaml` is picked up automatically.
+Leave `CORS_ORIGINS` unset for now; it defaults to `*`. Verify at `/health`.
+
+> `render.yaml` is only read for services created **from a Blueprint**. A service
+> created manually as a Web Service ignores it entirely and falls back to Render's
+> defaults (`npm install; npm run build` and `npm start`). If you went that route,
+> set these by hand under Settings:
+>
+> | Field | Value |
+> |---|---|
+> | Build Command | `npm ci --include=dev && npm run build:server` |
+> | Start Command | `node apps/server/dist/index.js` |
+> | Health Check Path | `/health` |
+>
+> `--include=dev` and `NODE_ENV=production` have to be set together: under
+> `NODE_ENV=production` npm skips devDependencies, which is where `tsup` lives, and
+> the build fails with `tsup: not found` several lines after the actual cause.
+>
+> The repo also defines a root `start` script pointing at the built server, so
+> Render's default start command works even without any of the above. The backend is
+> the only service deployed as a long-running process, which is why `npm start` at
+> the repo root means "run the backend".
 
 **2. Frontend → Vercel**
 Add New → Project → this repo, then **set Root Directory to `apps/web`** — without it
