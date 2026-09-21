@@ -12,11 +12,12 @@
  * `onResync` callback already wired here.
  */
 
-import { useCallback } from 'react';
-import { INTERVAL_IDS, type IntervalId } from '@cta/protocol';
+import { useCallback, useRef } from 'react';
+import { INTERVAL_IDS, type IntervalId, type ServerFrame } from '@cta/protocol';
 
 import { useMarketConnection } from '@/hooks/useMarketConnection';
 import { useMarketStore, selectStale } from '@/store/useMarketStore';
+import { CandleChart, type CandleChartHandle } from './CandleChart';
 import { ConnectionBanner } from './ConnectionBanner';
 import { OrderBook } from './OrderBook';
 import { PriceHeader } from './PriceHeader';
@@ -24,11 +25,22 @@ import { TierPanel } from './TierPanel';
 import { TradeTape } from './TradeTape';
 
 export function TradingPanel() {
-  // The order book rebuilds itself inside the connection hook, which owns it. The
-  // chart attaches here in the next slice.
-  const handleResync = useCallback(() => {}, []);
+  const chartRef = useRef<CandleChartHandle>(null);
 
-  useMarketConnection({ onResync: handleResync });
+  // The order book rebuilds itself inside the connection hook, which owns it. The
+  // chart is a component, so it is reloaded through its imperative handle.
+  const handleResync = useCallback((_reason: unknown, interval: IntervalId) => {
+    chartRef.current?.reload(interval);
+  }, []);
+
+  // The 10 Hz path: live candles go from the socket callback straight into the
+  // chart's imperative handle. Putting them in state would reconcile the tree ten
+  // times a second, on the one interaction the brief says must stay smooth.
+  const handleFrame = useCallback((frame: ServerFrame) => {
+    if (frame.t === 'candle') chartRef.current?.applyCandle(frame);
+  }, []);
+
+  useMarketConnection({ onResync: handleResync, onFrame: handleFrame });
 
   return (
     <div className="space-y-5">
@@ -38,6 +50,8 @@ export function TradingPanel() {
         <PriceHeader />
         <IntervalSelector />
       </div>
+
+      <CandleChart ref={chartRef} />
 
       <TierPanel />
 
