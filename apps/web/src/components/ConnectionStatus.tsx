@@ -13,7 +13,8 @@
  * appears only when the data can no longer be trusted.
  */
 
-import { useMarketStore, selectStale } from '@/store/useMarketStore';
+import { useEffect, useState } from 'react';
+import { useMarketStore, selectStale, isDataStalled } from '@/store/useMarketStore';
 
 export function ConnectionStatus() {
   const status = useMarketStore((s) => s.status);
@@ -21,7 +22,18 @@ export function ConnectionStatus() {
   const attempt = useMarketStore((s) => s.reconnectAttempt);
   const stale = useMarketStore(selectStale);
 
-  const { label, tone } = describe(status, attempt);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const dataStalled = useMarketStore((s) => isDataStalled(s, now));
+
+  // "Connected" and "receiving data" are different claims, and the pill should not
+  // make the stronger one when only the weaker is true.
+  const { label, tone } = dataStalled
+    ? { label: 'no data', tone: 'warn' as const }
+    : describe(status, attempt);
 
   return (
     <div
@@ -40,7 +52,7 @@ export function ConnectionStatus() {
         }`}
       />
       <span className="font-medium uppercase tracking-wide">{label}</span>
-      {!stale && (
+      {!stale && !dataStalled && (
         // Latency belongs here rather than only in the tier panel: it is the number
         // that tells you whether "live" means live.
         <span className="num text-ink-dim">{latencyMs.toFixed(0)}ms</span>

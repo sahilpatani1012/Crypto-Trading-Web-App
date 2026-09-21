@@ -24,6 +24,7 @@
 import { create } from 'zustand';
 import {
   BOOK_DISPLAY_DEPTH,
+  DATA_STALL_TIMEOUT_MS,
   DEFAULT_INTERVAL,
   PRICE_SCALE,
   QTY_SCALE,
@@ -105,6 +106,7 @@ export interface MarketActions {
   setLastPrice: (price: number, at: number) => void;
   setBook: (bids: Level[], asks: Level[], stats: BookStats) => void;
   noteMalformed: () => void;
+  noteData: (at: number) => void;
   setServerError: (code: string, message: string, at: number) => void;
   clearServerError: () => void;
   setInterval: (interval: IntervalId) => void;
@@ -211,6 +213,8 @@ export const useMarketStore = create<MarketState & MarketActions>((set) => ({
 
   noteMalformed: () => set((state) => ({ malformedFrames: state.malformedFrames + 1 })),
 
+  noteData: (at) => set({ lastUpdateAt: at }),
+
   setServerError: (code, message, at) => set({ lastError: { code, message, at } }),
 
   clearServerError: () => set({ lastError: null }),
@@ -259,6 +263,20 @@ export const selectPriceDirection = (s: MarketState): 'up' | 'down' | 'flat' => 
 };
 
 export const selectActiveTier = (s: MarketState): Tier | null => s.tier?.active ?? null;
+
+/**
+ * Whether market data has stopped arriving, on a socket that still claims to be up.
+ *
+ * This is deliberately separate from `selectStale`. The heartbeat detects a dead
+ * *peer*; it cannot detect a live peer that has gone silent, because pings would
+ * still be answered. Without this the screen just freezes, which reads as a broken
+ * app rather than a detected condition — and it is a real production failure mode,
+ * not only something the `force stall` debug control produces.
+ *
+ * Takes `now` explicitly so the caller controls when it is evaluated.
+ */
+export const isDataStalled = (s: MarketState, now: number): boolean =>
+  s.status === 'open' && s.lastUpdateAt !== null && now - s.lastUpdateAt > DATA_STALL_TIMEOUT_MS;
 
 export const selectSpread = (s: MarketState): number | null => {
   const bestBid = s.bids[0]?.[0];

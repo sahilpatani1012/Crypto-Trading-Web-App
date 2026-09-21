@@ -97,7 +97,12 @@ export function useMarketConnection(handlers: MarketConnectionHandlers = {}): vo
       onFrame: (frame) => {
         // Book deltas go to the reconciler, never to React. Only the derived top-N
         // is published, and only when the visible book actually changed.
-        if (frame.t === 'book') book.applyDelta(frame.delta);
+        if (frame.t === 'book') {
+          book.applyDelta(frame.delta);
+          // Counts as market data arriving, so a stream carrying only book updates
+          // is not mistaken for a stalled one.
+          useMarketStore.getState().noteData(Date.now());
+        }
         routeFrame(frame);
         handlersRef.current.onFrame?.(frame);
       },

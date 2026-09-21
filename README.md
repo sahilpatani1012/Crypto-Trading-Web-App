@@ -491,8 +491,19 @@ retries at once rather than serving out a backoff that grew while nobody was wat
 
 ### Stale state
 
-While the socket is not open, everything on screen keeps its last known values but is
-**dimmed**, with a banner saying `STALE` and how many seconds old the data is.
+There are two different failures here, kept apart because they mean different things.
+
+**Disconnected.** While the socket is not open, everything on screen keeps its last
+known values but is **dimmed**, with a banner saying `STALE` and how many seconds old
+the data is.
+
+**Connected but silent.** A peer can answer pings while sending no market data — the
+heartbeat cannot see that, because it only proves the peer is alive. Without
+announcing it the screen simply freezes, which reads as a broken app rather than a
+detected condition. After three seconds of no market frames the banner says `NO DATA`
+and the status pill stops claiming `LIVE`. Three seconds sits above the slowest tier's
+one-second cadence and below the six-second heartbeat, so a real stall is announced
+before the connection is torn down. The `force stall` debug control reproduces it.
 
 Blanking the screen destroys the user's context. Showing stale data as though it were
 live is worse than either — someone acting on a price from three minutes ago has been
@@ -716,9 +727,12 @@ simulated trading in about 1.5 seconds with no sleeps and no flakiness.
 - **The chart series grows over a long session.** Bars appended by `update()` are never
   trimmed, so a multi-hour session at 1 s bars accumulates. A production chart would
   keep a rolling window.
-- **A server that answers pings but sends no market data** would read as connected. The
-  heartbeat covers a dead peer, not a silent one; a data-staleness timeout would catch
-  it.
+- **A silent-but-alive server is announced, not acted on.** A peer that answers pings
+  while sending no market data is flagged after three seconds — "connected" and
+  "receiving data" are separate claims, and the heartbeat can only see the first — but
+  the client waits for the six-second heartbeat to actually reconnect rather than
+  tearing down early on data silence alone. A genuinely quiet market would otherwise
+  be mistaken for a fault.
 - **Watchlist reordering** (a stated bonus) is not built. Scoped out against a
   three-day budget in favour of finishing the graded requirements.
 - **Render free tier cold starts.** Documented above. Warmup also runs before

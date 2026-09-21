@@ -208,6 +208,21 @@ export const RATE_WINDOW_MS = 3_000;
  */
 export const HEARTBEAT_TIMEOUT_MS = 6_000;
 
+/**
+ * Silence of market data that the UI flags, while the socket still claims to be up.
+ *
+ * "Connected" and "receiving data" are not the same thing, and the heartbeat only
+ * covers the first: a peer that answers pings but sends nothing reads as perfectly
+ * healthy. The screen would simply freeze, which looks like a broken app rather than
+ * a detected condition.
+ *
+ * Three seconds sits well above the slowest tier's one-second cadence — and at eight
+ * trades a second a genuinely empty three-second window is vanishingly unlikely —
+ * while staying below the six-second heartbeat, so a real stall is announced before
+ * the connection is torn down.
+ */
+export const DATA_STALL_TIMEOUT_MS = 3_000;
+
 /** First reconnect delay. Doubles per attempt up to the cap. */
 export const RECONNECT_BASE_MS = 500;
 
