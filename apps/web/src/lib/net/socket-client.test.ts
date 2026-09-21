@@ -433,6 +433,131 @@ describe('SocketClient — resynchronising after a gap', () => {
   });
 });
 
+/**
+ * A minimal stand-in for `document`.
+ *
+ * The client only uses three members of it, so faking those is cheaper than pulling
+ * in a DOM implementation — and it makes listener removal directly assertable,
+ * which a real document would not.
+ */
+class FakeDocument {
+  visibilityState: 'visible' | 'hidden' = 'visible';
+  private listeners: Array<() => void> = [];
+
+  addEventListener(type: string, fn: () => void): void {
+    if (type === 'visibilitychange') this.listeners.push(fn);
+  }
+
+  removeEventListener(type: string, fn: () => void): void {
+    if (type === 'visibilitychange') this.listeners = this.listeners.filter((l) => l !== fn);
+  }
+
+  set(state: 'visible' | 'hidden'): void {
+    this.visibilityState = state;
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  listenerCount(): number {
+    return this.listeners.length;
+  }
+}
+
+describe('SocketClient — tab visibility', () => {
+  let doc: FakeDocument;
+
+  beforeEach(() => {
+    doc = new FakeDocument();
+    (globalThis as { document?: unknown }).document = doc;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+  });
+
+  it('does not resync after a brief tab switch', () => {
+    const { client, recorded, advance } = makeClient();
+    client.connect();
+    FakeSocket.latest().accept();
+    recorded.resyncs.length = 0;
+    const pingsBefore = FakeSocket.latest().framesOfType('ping').length;
+
+    // A hidden tab still receives WebSocket frames — only timers are throttled — so
+    // a quick alt-tab misses nothing. Resyncing here would mean a snapshot and a
+    // history refetch on every tab switch.
+    doc.set('hidden');
+    advance(1_000);
+    doc.set('visible');
+
+    expect(recorded.resyncs).toEqual([]);
+    // It still pings immediately, to re-establish confidence in liveness.
+    expect(FakeSocket.latest().framesOfType('ping').length).toBeGreaterThan(pingsBefore);
+
+    client.dispose();
+  });
+
+  it('resyncs after a long hide, when the page may have been frozen', () => {
+    const { client, recorded, advance } = makeClient();
+    client.connect();
+    FakeSocket.latest().accept();
+    recorded.resyncs.length = 0;
+
+    doc.set('hidden');
+    advance(HEARTBEAT_TIMEOUT_MS + 5_000);
+    doc.set('visible');
+
+    expect(recorded.resyncs).toEqual(['visible']);
+    client.dispose();
+  });
+
+  it('does not tear down a healthy socket whose timers were merely throttled', () => {
+    const { client, advance } = makeClient();
+    client.connect();
+    FakeSocket.latest().accept();
+
+    doc.set('hidden');
+    // Long enough that the last pong looks stale, but the socket never died.
+    advance(HEARTBEAT_TIMEOUT_MS + 20_000);
+    doc.set('visible');
+
+    // The liveness clock is reset on becoming visible, so the next tick does not
+    // declare dead a connection that was only ever throttled.
+    advance(PING_INTERVAL_MS);
+    expect(client.getStatus()).toBe('open');
+
+    client.dispose();
+  });
+
+  it('retries immediately rather than serving out a backoff grown while hidden', () => {
+    const { client, advance } = makeClient({ random: () => 1 });
+    client.connect();
+    FakeSocket.latest().accept();
+
+    for (let i = 0; i < 5; i += 1) {
+      FakeSocket.latest().serverClose();
+      advance(RECONNECT_CAP_MS);
+    }
+    FakeSocket.latest().serverClose();
+    const before = FakeSocket.instances.length;
+
+    doc.set('hidden');
+    advance(100);
+    doc.set('visible');
+
+    // A returning user should not wait fifteen seconds for the next attempt.
+    expect(FakeSocket.instances.length).toBeGreaterThan(before);
+    client.dispose();
+  });
+
+  it('removes the visibility listener on dispose', () => {
+    const { client } = makeClient();
+    client.connect();
+    expect(doc.listenerCount()).toBe(1);
+
+    client.dispose();
+    expect(doc.listenerCount()).toBe(0);
+  });
+});
+
 describe('SocketClient — bad input', () => {
   it('survives a malformed frame and keeps the connection', () => {
     const { client, recorded } = makeClient();

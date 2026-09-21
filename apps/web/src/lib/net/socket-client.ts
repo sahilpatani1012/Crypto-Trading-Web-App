@@ -131,6 +131,8 @@ export class SocketClient {
   private pingId = 0;
   private lastPongAt = 0;
   private lastStatsEmitAt = 0;
+  /** When the tab was hidden, so a brief switch does not trigger a full resync. */
+  private hiddenAt: number | null = null;
 
   private readonly latency = new LatencyMeter();
   private readonly rate = new RateMeter(RATE_WINDOW_MS);
@@ -381,11 +383,19 @@ export class SocketClient {
    *
    * Checking before sending means a connection that stopped answering is torn down
    * on this tick rather than after one more wasted probe.
+   *
+   * The check is skipped entirely while the tab is hidden. Browsers throttle
+   * background timers — often to once a minute — so by the time this runs, the last
+   * pong looks far older than the timeout regardless of whether anything is wrong.
+   * Acting on that would mean tearing down a perfectly healthy connection because
+   * our own timer was late: measuring our throttling and calling it a network
+   * failure. Pings still go out, and the clock is reset when the tab returns.
    */
   private onPingTick(): void {
     if (this.disposed || this.status !== 'open') return;
 
-    if (this.now() - this.lastPongAt > HEARTBEAT_TIMEOUT_MS) {
+    const hidden = this.hiddenAt !== null;
+    if (!hidden && this.now() - this.lastPongAt > HEARTBEAT_TIMEOUT_MS) {
       // The socket may still claim to be OPEN. It is not.
       this.detach();
       this.clearIntervalTimers();
@@ -434,21 +444,35 @@ export class SocketClient {
    * until it reaches 1 Hz. A tab nobody is looking at ends up costing almost nothing,
    * using a mechanism built for broken connections rather than a special case.
    *
-   * On becoming visible we resync, because throttled timers mean we cannot know what
-   * was missed. If the socket died while hidden — common on mobile — the heartbeat
-   * check catches it on the next tick.
+   * On becoming visible we ping immediately, and resync **only if the tab was hidden
+   * long enough to matter**. Message delivery is not throttled the way timers are —
+   * a hidden tab still receives WebSocket frames — so a quick alt-tab misses
+   * nothing, and resyncing on every one would mean a snapshot and a history refetch
+   * per tab switch. Past the heartbeat timeout the page may have been frozen
+   * outright, at which point we genuinely cannot know what we missed.
    */
   private installVisibilityHandler(): void {
     if (typeof document === 'undefined' || this.visibilityHandler !== null) return;
 
     this.visibilityHandler = () => {
       if (this.disposed) return;
-      if (document.visibilityState !== 'visible') return;
+
+      if (document.visibilityState !== 'visible') {
+        this.hiddenAt = this.now();
+        return;
+      }
+
+      const hiddenFor = this.hiddenAt === null ? 0 : this.now() - this.hiddenAt;
+      this.hiddenAt = null;
 
       if (this.status === 'open') {
+        // Reset the liveness clock before pinging: timers were throttled while
+        // hidden, so the last pong may look older than it really is.
         this.lastPongAt = this.now();
         this.ping();
-        this.opts.onResync?.('visible', this.interval);
+        if (hiddenFor > HEARTBEAT_TIMEOUT_MS) {
+          this.opts.onResync?.('visible', this.interval);
+        }
       } else if (this.reconnectTimer !== null) {
         // Do not make a returning user sit out a backoff that grew while they were
         // away. Retry now and reset the sequence.

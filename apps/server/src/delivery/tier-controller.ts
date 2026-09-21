@@ -93,7 +93,7 @@ export class TierController {
   private latencyMs = 0;
   private jitterMs = 0;
   private score = 0;
-  private reason = 'initial';
+  private reason = 'awaiting first report';
 
   private lastChangeAt: number;
   private lastReportAt: number;
