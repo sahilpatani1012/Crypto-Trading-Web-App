@@ -1,15 +1,23 @@
 /**
  * One connected client.
  *
- * Owns everything that belongs to a single socket: its subscription, its engine
- * listeners, and — from S3 — its delivery tier and scheduler. The transport layer
- * hands it already-validated frames; it never sees raw bytes, and it never touches
- * the `ws` library.
+ * Owns everything belonging to a single socket: its subscription, its engine
+ * listeners, its delivery tier, and its coalescing scheduler. The transport layer
+ * hands it already-validated frames; it never sees raw bytes and never touches the
+ * `ws` library.
  *
- * In this slice the session forwards every engine event immediately. S3 inserts a
- * coalescing scheduler between the engine and `send`, which is the only change
- * needed to make delivery adaptive — the subscription and lifecycle logic here
- * stays exactly as it is.
+ * The shape of the pipeline:
+ *
+ *     engine events ──▶ DeliveryScheduler ──(every periodMs)──▶ socket
+ *                              ▲
+ *                              │ setPeriod()
+ *                       TierController ◀── netreport frames
+ *
+ * The engine emits at its own pace and knows nothing about any of this. The
+ * scheduler accumulates. The tier controller decides how often the scheduler fires.
+ * That separation is what makes the correctness claim checkable: the market data is
+ * produced identically regardless of who is connected or how fast they are being
+ * served.
  */
 
 import {
@@ -18,8 +26,6 @@ import {
   PRICE_SCALE,
   QTY_SCALE,
   TICK_SIZE,
-  TIER_PERIOD_MS,
-  TIER_TARGET_HZ,
   encodeFrame,
   isIntervalId,
   type ClientFrame,
@@ -30,19 +36,23 @@ import {
 
 import type { Clock } from '../market/clock';
 import type { MarketEngine } from '../market/engine';
+import { DeliveryScheduler, type FlushPayload } from './scheduler';
+import { TierController, type TierChange } from './tier-controller';
 
 /**
  * The slice of a WebSocket this session actually needs.
  *
  * Narrowing it to four members means the session can be unit-tested with a plain
- * object that records what was sent, with no `ws` instance, no HTTP server and no
- * open port. That matters a lot in S3, where the tests have to assert exactly which
- * frames came out at which times.
+ * object that records what was sent — no `ws` instance, no HTTP server, no open
+ * port, no sleeps. That matters most here, where the tests have to assert exactly
+ * which frames left and when.
+ *
+ * `bufferedAmount` is in the interface for production, not for tests: the scheduler
+ * reads it to detect a client that has stopped draining.
  */
 export interface SocketLike {
   send(data: string): void;
   close(): void;
-  /** Bytes queued but not yet flushed to the network. Used for backpressure. */
   readonly bufferedAmount: number;
   readonly isOpen: boolean;
 }
@@ -64,22 +74,22 @@ export class ClientSession {
   private readonly engine: MarketEngine;
   private readonly clock: Clock;
   private readonly log: (message: string, detail?: Record<string, unknown>) => void;
+  private readonly tiers: TierController;
 
+  private scheduler: DeliveryScheduler | null = null;
   private interval: IntervalId = DEFAULT_INTERVAL;
   private subscribed = false;
   private closed = false;
 
-  /**
-   * Teardown callbacks for every engine listener this session registered.
-   *
-   * Without this a disconnected client keeps its listeners alive: the engine goes
-   * on invoking them, serialising frames for a socket nobody is reading, and the
-   * closure keeps the whole session object out of reach of the garbage collector.
-   * It does not fail loudly — it just gets slower and fatter over hours.
-   */
+  /** Teardown callbacks for every engine listener this session registered. */
   private teardown: Array<() => void> = [];
 
-  /** Counters surfaced by /health, useful when demonstrating behaviour live. */
+  /**
+   * Debug: skip the next book delta for this connection only, forcing a sequence
+   * gap so recovery can be demonstrated without needing real packet loss (D-013).
+   */
+  private dropNextDelta = false;
+
   private framesSent = 0;
   private malformedFrames = 0;
 
@@ -89,6 +99,10 @@ export class ClientSession {
     this.engine = options.engine;
     this.clock = options.clock;
     this.log = options.log ?? (() => {});
+    this.tiers = new TierController({
+      clock: options.clock,
+      forced: options.forcedTier ?? null,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -98,10 +112,9 @@ export class ClientSession {
   /**
    * Sent the moment the socket opens, before any subscription.
    *
-   * The client cannot render a single price without knowing the scales — every
-   * price on the wire is an integer tick count, and turning 6543210 into
-   * "$65,432.10" needs `priceScale`. Pushing it rather than making the client
-   * fetch it removes a round trip from the critical path.
+   * The client cannot render a single price without the scales — every price on the
+   * wire is an integer tick count. Pushing them rather than making the client fetch
+   * them removes a round trip from the critical path.
    */
   greet(): void {
     this.send({
@@ -113,6 +126,7 @@ export class ClientSession {
       intervals: Object.keys(INTERVALS),
       serverTime: this.clock.now(),
     });
+    this.sendTier(this.tiers.state());
   }
 
   handleFrame(frame: ClientFrame): void {
@@ -124,8 +138,11 @@ export class ClientSession {
         break;
 
       case 'ping':
-        // Answered inline and immediately. Anything else would measure our own
-        // scheduling delay rather than the network's round trip.
+        // Answered inline and immediately. Queueing it behind the scheduler would
+        // measure our own delivery cadence rather than the network's round trip —
+        // at minimal tier that would add up to a second of phantom latency and the
+        // client would report itself into an even slower tier. A measurement path
+        // must never run through the thing it is measuring.
         this.send({
           t: 'pong',
           id: frame.id,
@@ -135,13 +152,25 @@ export class ClientSession {
         break;
 
       case 'netreport':
-        // S3 feeds this to the tier controller. Accepted and ignored for now so
-        // the client can be built against the real protocol.
+        this.applyTierChange(
+          this.tiers.onReport({
+            latencyMs: frame.latencyMs,
+            jitterMs: frame.jitterMs,
+            samples: frame.samples,
+          }),
+          // Always echo on a report, even when the tier held: the UI shows live
+          // latency, jitter and score, and those move on every report.
+          true,
+        );
         break;
 
       case 'setTier':
+        this.applyTierChange(this.tiers.setForced(frame.tier), true);
+        this.log('tier override', { id: this.id, tier: frame.tier });
+        break;
+
       case 'debug':
-        // S3.
+        if (frame.action === 'dropDelta') this.armDeltaDrop();
         break;
     }
   }
@@ -158,6 +187,8 @@ export class ClientSession {
 
     for (const off of this.teardown) off();
     this.teardown = [];
+    this.scheduler?.stop();
+    this.scheduler = null;
 
     this.log('session closed', {
       id: this.id,
@@ -166,12 +197,14 @@ export class ClientSession {
     });
   }
 
-  stats(): { id: string; interval: IntervalId; framesSent: number; malformedFrames: number } {
+  stats() {
     return {
       id: this.id,
       interval: this.interval,
       framesSent: this.framesSent,
       malformedFrames: this.malformedFrames,
+      tier: this.tiers.state(),
+      scheduler: this.scheduler?.stats() ?? { flushes: 0, backpressureSkips: 0 },
     };
   }
 
@@ -191,39 +224,43 @@ export class ClientSession {
 
     this.interval = interval;
 
-    // Re-subscribing is how the client changes interval, and how it recovers after
-    // a reconnect. Tearing the old listeners down first keeps that idempotent —
+    // Re-subscribing is how a client changes interval and how it recovers after a
+    // reconnect. Tearing the old listeners down first keeps that idempotent —
     // otherwise a client that switched interval three times would receive four
     // copies of every trade.
-    if (this.subscribed) {
-      for (const off of this.teardown) off();
-      this.teardown = [];
+    for (const off of this.teardown) off();
+    this.teardown = [];
+
+    if (this.scheduler === null) {
+      this.scheduler = new DeliveryScheduler({
+        periodMs: this.tiers.periodMs(),
+        onTick: () => this.onSchedulerTick(),
+        onFlush: (payload) => this.onFlush(payload),
+        bufferedBytes: () => this.socket.bufferedAmount,
+      });
     }
 
     this.teardown = [
-      this.engine.events.on('trade', (trade) => {
-        this.send({ t: 'trades', symbol: this.engine.symbol, trades: [trade], dropped: 0 });
-      }),
+      this.engine.events.on('trade', (trade) => this.scheduler?.queueTrade(trade)),
       this.engine.events.on('book', (delta) => {
-        this.send({ t: 'book', symbol: this.engine.symbol, delta });
+        if (this.dropNextDelta) {
+          this.dropNextDelta = false;
+          this.log('debug: dropped book delta', { id: this.id, seq: delta.fromSeq });
+          return;
+        }
+        this.scheduler?.queueBookDelta(delta);
       }),
       this.engine.events.on('candle', (event) => {
         if (event.interval !== this.interval) return;
-        this.send({
-          t: 'candle',
-          symbol: this.engine.symbol,
-          interval: event.interval,
-          candle: event.candle,
-          closed: event.closed,
-        });
+        this.scheduler?.queueCandle(event.candle, event.interval, event.closed);
       }),
     ];
 
     this.subscribed = true;
     this.send({ t: 'subscribed', symbol: this.engine.symbol, interval });
 
-    // Seed the chart's live bar straight away rather than making it wait for the
-    // next trade — at the 1m interval that could be most of a minute.
+    // Seed the chart's live bar immediately rather than making it wait for the next
+    // trade — at the 1m interval that could be most of a minute of blank chart.
     const current = this.engine.currentCandle(interval);
     if (current !== null) {
       this.send({
@@ -235,25 +272,105 @@ export class ClientSession {
       });
     }
 
-    // The tier frame is stubbed at `full` in this slice so the client can render
-    // the indicator; S3 replaces this with real state-machine output.
-    this.send({
-      t: 'tier',
-      active: 'full',
-      auto: 'full',
-      forced: false,
-      targetHz: TIER_TARGET_HZ.full,
-      periodMs: TIER_PERIOD_MS.full,
-      score: 0,
-      latencyMs: 0,
-      jitterMs: 0,
-      reason: 'initial',
-    });
+    this.sendTier(this.tiers.state());
+  }
+
+  // -------------------------------------------------------------------------
+  // Delivery
+  // -------------------------------------------------------------------------
+
+  /**
+   * Runs once per scheduler period, before the flush.
+   *
+   * Piggybacking the missing-report check on the delivery timer avoids a second
+   * timer per connection. It is checked at least once a second even at minimal
+   * tier, which is far more often than the twelve-second timeout needs.
+   */
+  private onSchedulerTick(): void {
+    const change = this.tiers.onTick();
+    if (change !== null) this.applyTierChange(change, false);
+  }
+
+  private onFlush(payload: FlushPayload): void {
+    const symbol = this.engine.symbol;
+
+    if (payload.candle !== null) {
+      this.send({
+        t: 'candle',
+        symbol,
+        interval: payload.candle.interval,
+        candle: payload.candle.candle,
+        closed: payload.candle.closed,
+      });
+    }
+
+    if (payload.trades.length > 0 || payload.droppedTrades > 0) {
+      this.send({
+        t: 'trades',
+        symbol,
+        trades: payload.trades,
+        dropped: payload.droppedTrades,
+      });
+    }
+
+    if (payload.book !== null) {
+      this.send({ t: 'book', symbol, delta: payload.book });
+    }
+  }
+
+  /**
+   * Apply a tier decision: retime the scheduler if the tier moved, and tell the
+   * client either way when asked to.
+   */
+  private applyTierChange(change: TierChange, alwaysEcho: boolean): void {
+    if (change.changed) {
+      this.scheduler?.setPeriod(change.periodMs);
+      this.log('tier changed', {
+        id: this.id,
+        active: change.active,
+        auto: change.auto,
+        forced: change.forced,
+        score: change.score,
+        reason: change.reason,
+      });
+    }
+    if (change.changed || alwaysEcho) this.sendTier(change);
+  }
+
+  /**
+   * Force a sequence gap on this connection only.
+   *
+   * The pending accumulation is flushed *first*. Without that, the dropped delta
+   * would be swallowed by coalescing: a pending range of [104, 104] plus a skipped
+   * 105 plus an incoming 106 merges to [104, 106], which looks perfectly contiguous
+   * to the client while silently missing 105's changes. Flushing first closes the
+   * range at 104, so the next frame starts at 106 and the client's contiguity check
+   * fires exactly as it should.
+   */
+  private armDeltaDrop(): void {
+    this.scheduler?.flush();
+    this.dropNextDelta = true;
+    this.log('debug: armed delta drop', { id: this.id });
   }
 
   // -------------------------------------------------------------------------
   // Sending
   // -------------------------------------------------------------------------
+
+  private sendTier(state: TierChange | ReturnType<TierController['state']>): void {
+    this.send({
+      t: 'tier',
+      active: state.active,
+      auto: state.auto,
+      forced: state.forced,
+      targetHz: state.targetHz,
+      periodMs: state.periodMs,
+      score: state.score,
+      latencyMs: state.latencyMs,
+      jitterMs: state.jitterMs,
+      reason: state.reason,
+    });
+  }
 
   private send(frame: ServerFrame): void {
     if (this.closed || !this.socket.isOpen) return;
@@ -263,8 +380,8 @@ export class ClientSession {
     } catch (error) {
       // A socket can be torn down between the isOpen check and the write. That is
       // an ordinary race on a network server, not an exceptional condition, so the
-      // session is closed rather than allowed to throw into the engine's emit loop
-      // — where it would abort delivery to every other client.
+      // session closes itself rather than letting the throw escape into the
+      // engine's emit loop — where it would abort delivery to every other client.
       this.log('send failed, closing session', {
         id: this.id,
         error: error instanceof Error ? error.message : String(error),
