@@ -238,6 +238,27 @@ export class SocketClient {
   }
 
   /**
+   * Debug control: ask the server to close this connection.
+   *
+   * There is no browser-side equivalent. DevTools' offline emulation blocks new
+   * requests but leaves an established WebSocket flowing, so it cannot be used to
+   * exercise the reconnect path.
+   */
+  forceDisconnect(): void {
+    this.send({ t: 'debug', action: 'disconnect' });
+  }
+
+  /**
+   * Debug control: ask the server to go silent without closing.
+   *
+   * Reproduces a half-open connection — healthy to both operating systems, dead in
+   * practice. Only the heartbeat can detect it, after HEARTBEAT_TIMEOUT_MS.
+   */
+  forceStall(): void {
+    this.send({ t: 'debug', action: 'stall' });
+  }
+
+  /**
    * Tear everything down.
    *
    * Every timer, the visibility listener and the socket. React Strict Mode mounts

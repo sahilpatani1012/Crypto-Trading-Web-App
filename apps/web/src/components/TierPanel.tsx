@@ -99,9 +99,28 @@ export function TierPanel() {
           type="button"
           disabled={stale}
           onClick={() => client?.forceGap()}
-          className="rounded border border-down/40 bg-down-soft px-3 py-1.5 text-xs text-down transition-colors hover:border-down disabled:cursor-not-allowed disabled:opacity-40"
+          title="Server skips this connection's next book delta, forcing a sequence gap"
+          className="rounded border border-down/40 bg-down-soft px-3 py-1.5 text-xs text-down transition-colors hover:border-down focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40"
         >
           force book gap
+        </button>
+        <button
+          type="button"
+          disabled={stale}
+          onClick={() => client?.forceDisconnect()}
+          title="Server closes this connection. DevTools' offline mode cannot do this — it blocks new requests but leaves an established WebSocket flowing"
+          className="rounded border border-down/40 bg-down-soft px-3 py-1.5 text-xs text-down transition-colors hover:border-down focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          force disconnect
+        </button>
+        <button
+          type="button"
+          disabled={stale}
+          onClick={() => client?.forceStall()}
+          title="Server goes silent without closing — a half-open connection. Only the client heartbeat can detect it, after 6s"
+          className="rounded border border-warn/40 bg-warn/10 px-3 py-1.5 text-xs text-warn transition-colors hover:border-warn focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          force stall
         </button>
       </div>
     </section>

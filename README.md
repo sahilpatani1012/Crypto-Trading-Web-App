@@ -513,11 +513,28 @@ All three are in the **Delivery tier** panel, and all three work on the deployed
 |---|---|
 | `force full` / `force degraded` / `force minimal` | Pins this connection's tier |
 | `automatic` | Releases the override, resuming automatic control with dwell reset |
-| `force book gap` | Makes the server silently skip this connection's next book delta |
+| `force book gap` | Server silently skips this connection's next book delta |
+| `force disconnect` | Server closes this connection cleanly |
+| `force stall` | Server goes silent without closing — a half-open connection |
 
 Under the hood these are WebSocket frames — `{t:'setTier', tier}` and
-`{t:'debug', action:'dropDelta'}` — so they address one specific connection, which a
-REST endpoint could not do without inventing a connection-ID scheme.
+`{t:'debug', action}` — so they address one specific connection, which a REST
+endpoint could not do without inventing a connection-ID scheme.
+
+**Why `force disconnect` exists at all**, given a browser can go offline: Chrome
+DevTools' offline emulation blocks *new* requests — fetches, navigations, new
+WebSocket handshakes — but leaves an already-established WebSocket flowing. Toggling
+it offline does not exercise the reconnect path at all; the socket keeps delivering
+while page reloads fail, which is confusing rather than useful. The same reasoning
+the brief gives for the tier override applies here: demonstrating a state should not
+depend on poor Wi-Fi.
+
+`force stall` is the more interesting of the two. It reproduces a **half-open**
+connection: the server stops sending anything, including pongs, but never closes. To
+both operating systems the connection looks perfectly healthy — `readyState` stays
+`OPEN` and `onclose` never fires. Only the client's application heartbeat can detect
+it, which it does after six seconds. That is the failure mode the heartbeat exists
+for, and it is otherwise very hard to produce on demand.
 
 **While an override is active the state machine keeps running.** It still consumes
 reports and still computes the tier it *would* have chosen, and the panel shows both:

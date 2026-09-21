@@ -55,13 +55,22 @@ export const SetTierFrameSchema = z.object({
 });
 
 /**
- * Debug control: `dropDelta` makes the server silently skip the next book delta
- * for THIS connection only, forcing a sequence gap so recovery can be demonstrated
- * without needing real packet loss.
+ * Debug controls, all scoped to THIS connection only (D-013).
+ *
+ * - `dropDelta` — skip the next book delta, forcing a sequence gap so recovery can
+ *   be shown without needing real packet loss.
+ * - `disconnect` — close the socket cleanly, so the reconnect path can be shown
+ *   without unplugging anything. Chrome DevTools' offline emulation does not tear
+ *   down an already-established WebSocket — it only blocks *new* requests — so
+ *   there is no browser-side way to trigger this.
+ * - `stall` — stop sending anything at all, including pongs, while leaving the
+ *   socket open. This is the half-open case: the connection looks perfectly healthy
+ *   to both operating systems, and only the client's application heartbeat can
+ *   detect it.
  */
 export const DebugFrameSchema = z.object({
   t: z.literal('debug'),
-  action: z.enum(['dropDelta']),
+  action: z.enum(['dropDelta', 'disconnect', 'stall']),
 });
 
 export const ClientFrameSchema = z.discriminatedUnion('t', [

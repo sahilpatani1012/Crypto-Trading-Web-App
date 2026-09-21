@@ -90,6 +90,15 @@ export class ClientSession {
    */
   private dropNextDelta = false;
 
+  /**
+   * Debug: suppress every outbound frame while leaving the socket open.
+   *
+   * This is the half-open connection, reproduced deliberately. Nothing at the TCP
+   * or WebSocket layer indicates anything is wrong — only the client's application
+   * heartbeat, which notices that no pong has come back, can detect it.
+   */
+  private stalled = false;
+
   private framesSent = 0;
   private malformedFrames = 0;
 
@@ -171,6 +180,8 @@ export class ClientSession {
 
       case 'debug':
         if (frame.action === 'dropDelta') this.armDeltaDrop();
+        else if (frame.action === 'disconnect') this.debugDisconnect();
+        else if (frame.action === 'stall') this.debugStall();
         break;
     }
   }
@@ -363,6 +374,24 @@ export class ClientSession {
     this.log('debug: armed delta drop', { id: this.id });
   }
 
+  /**
+   * Debug: close this connection cleanly (D-013).
+   *
+   * Needed because there is no browser-side way to do it. Chrome DevTools' offline
+   * emulation blocks new requests but leaves an established WebSocket flowing, so
+   * "go offline" in DevTools does not exercise the reconnect path at all.
+   */
+  private debugDisconnect(): void {
+    this.log('debug: closing connection on request', { id: this.id });
+    this.close();
+  }
+
+  /** Debug: go silent without closing, so the client's heartbeat has to notice. */
+  private debugStall(): void {
+    this.log('debug: stalling connection on request', { id: this.id });
+    this.stalled = true;
+  }
+
   // -------------------------------------------------------------------------
   // Sending
   // -------------------------------------------------------------------------
@@ -383,7 +412,7 @@ export class ClientSession {
   }
 
   private send(frame: ServerFrame): void {
-    if (this.closed || !this.socket.isOpen) return;
+    if (this.closed || this.stalled || !this.socket.isOpen) return;
     try {
       this.socket.send(encodeFrame(frame));
       this.framesSent += 1;
