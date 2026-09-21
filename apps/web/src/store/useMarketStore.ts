@@ -46,6 +46,14 @@ export interface MarketState {
   retryInMs: number | null;
   /** Frames the server sent that failed validation. Surfaced in the debug panel. */
   malformedFrames: number;
+  /**
+   * The last `error` frame the server sent.
+   *
+   * Without surfacing this, a rejected subscribe leaves the status pill green and
+   * the screen simply empty — the app looks connected and healthy while receiving
+   * nothing, with no indication why.
+   */
+  lastError: { code: string; message: string; at: number } | null;
 
   // --- symbol metadata ------------------------------------------------------
   symbol: string;
@@ -97,6 +105,8 @@ export interface MarketActions {
   setLastPrice: (price: number, at: number) => void;
   setBook: (bids: Level[], asks: Level[], stats: BookStats) => void;
   noteMalformed: () => void;
+  setServerError: (code: string, message: string, at: number) => void;
+  clearServerError: () => void;
   setInterval: (interval: IntervalId) => void;
   setClient: (client: SocketClient | null) => void;
   reset: () => void;
@@ -107,6 +117,7 @@ const initial: MarketState = {
   reconnectAttempt: 0,
   retryInMs: null,
   malformedFrames: 0,
+  lastError: null,
 
   symbol: SYMBOL,
   priceScale: PRICE_SCALE,
@@ -199,6 +210,10 @@ export const useMarketStore = create<MarketState & MarketActions>((set) => ({
     }),
 
   noteMalformed: () => set((state) => ({ malformedFrames: state.malformedFrames + 1 })),
+
+  setServerError: (code, message, at) => set({ lastError: { code, message, at } }),
+
+  clearServerError: () => set({ lastError: null }),
 
   setInterval: (interval) => set({ interval }),
 

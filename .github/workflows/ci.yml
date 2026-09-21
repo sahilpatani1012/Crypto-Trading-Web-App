@@ -1,0 +1,46 @@
+# Continuous integration.
+#
+# Runs on every push and pull request, against the same commands a reviewer would
+# run from a fresh clone. `npm ci` rather than `npm install` so the lockfile is
+# actually exercised — a lockfile that has drifted from package.json is a failure a
+# reviewer would hit before anything else.
+#
+# Render and Netlify both deploy automatically on a push to master. This gate runs
+# alongside them rather than in front of them, which is the honest description: a
+# red build does not currently block a deploy. Wiring that up means a deploy hook
+# triggered from this workflow instead of the platforms' own git integration, which
+# is documented in the README's limitations rather than left implied.
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Both apps, because they fail in different ways: the server build is a tsup
+      # bundle that must resolve the workspace protocol package, and the web build
+      # is where a Server/Client Component boundary mistake surfaces.
+      - name: Build
+        run: npm run build

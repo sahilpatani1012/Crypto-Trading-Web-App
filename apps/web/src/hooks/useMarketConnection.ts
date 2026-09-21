@@ -151,6 +151,18 @@ function routeFrame(frame: ServerFrame): void {
       store.setTier(frame);
       break;
 
+    case 'subscribed':
+      // A successful subscribe clears any earlier rejection: whatever was wrong
+      // has been resolved, and leaving the message up would be its own small lie.
+      store.clearServerError();
+      break;
+
+    case 'error':
+      // Surfaced rather than swallowed. A rejected subscribe otherwise leaves the
+      // screen connected, green, and empty, with nothing to explain it.
+      store.setServerError(frame.code, frame.message, Date.now());
+      break;
+
     case 'trades':
       store.pushTrades(frame.trades, frame.dropped, Date.now());
       break;

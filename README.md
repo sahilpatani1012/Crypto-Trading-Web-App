@@ -537,6 +537,20 @@ silently missing 105's changes.
 
 ---
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request: `npm ci`, then
+typecheck, tests and both production builds. `npm ci` rather than `npm install`, so a
+lockfile that has drifted from `package.json` fails here rather than in a reviewer's
+terminal.
+
+Honest scope: Render and Netlify deploy from their own git integrations, so this gate
+runs *alongside* a deploy rather than in front of it — a red build does not currently
+block one. Gating properly means replacing the platforms' auto-deploy with a deploy
+hook fired from this workflow.
+
+---
+
 ## Deployment
 
 The two services deploy separately, and **the backend cannot go on a serverless
@@ -710,5 +724,5 @@ simulated trading in about 1.5 seconds with no sleeps and no flakiness.
   the server-side round-trip test that is meant to prove "snapshot plus deltas
   reproduces the server's book" is verifying a *copy* of the client's logic rather
   than the client's logic. They belong in `packages/protocol`.
-- **The client ignores `error` frames.** A rejected subscribe leaves the status pill
-  green with no data arriving, rather than saying what went wrong.
+- **CI does not gate deploys.** See above — the platforms deploy on push from their
+  own git integrations, so a failing build is visible but not blocking.

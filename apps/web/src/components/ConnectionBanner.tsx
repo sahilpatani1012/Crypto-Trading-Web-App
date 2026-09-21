@@ -24,6 +24,7 @@ export function ConnectionBanner() {
   const attempt = useMarketStore((s) => s.reconnectAttempt);
   const lastUpdateAt = useMarketStore((s) => s.lastUpdateAt);
   const stale = useMarketStore(selectStale);
+  const lastError = useMarketStore((s) => s.lastError);
 
   // A ticking "last seen" is worth a re-render a second: the number is the whole
   // point of the banner, and a frozen "0s ago" would be its own small lie.
@@ -33,6 +34,21 @@ export function ConnectionBanner() {
     const timer = setInterval(() => forceTick((n) => n + 1), 1_000);
     return () => clearInterval(timer);
   }, [stale]);
+
+  // A server-side rejection is shown even while the socket is healthy: being
+  // connected but refused is exactly the case that otherwise looks like success.
+  if (!stale && lastError !== null) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-down/40 bg-down-soft px-4 py-2.5 text-sm"
+      >
+        <span className="font-medium text-down">SERVER ERROR</span>
+        <span className="num text-xs text-ink-faint">{lastError.code}</span>
+        <span className="text-ink-dim">{lastError.message}</span>
+      </div>
+    );
+  }
 
   if (!stale) return null;
 
