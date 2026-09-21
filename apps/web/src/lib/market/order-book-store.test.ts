@@ -428,6 +428,27 @@ describe('OrderBookStore — failures and lifecycle', () => {
     expect(book.top().bids).toEqual([[200, 3]]);
   });
 
+  it('clears the held book on reconnect, but keeps it through a gap resync', async () => {
+    const { book, pending } = setup();
+    book.start();
+    pending[0]!.resolve(snapshot(500, [[100, 10]], [[110, 5]]));
+    await settle();
+    expect(book.top().bids).toHaveLength(1);
+
+    // A gap means one missed update: the book is very nearly right, and blanking it
+    // would be a worse lie than a brief near-miss.
+    book.applyDelta(one(600));
+    expect(book.top().bids).toHaveLength(1);
+
+    // A reconnect means the book describes a market from before the outage — and by
+    // the time this runs the UI is already back to 'open', so republishing it would
+    // show pre-disconnect levels at full opacity with a live-looking spread.
+    book.start('reconnect');
+    expect(book.top().bids).toHaveLength(0);
+    expect(book.top().asks).toHaveLength(0);
+    expect(book.stats().lastSeq).toBe(0);
+  });
+
   it('stops everything on dispose', async () => {
     const { book, pending } = setup();
     book.start();

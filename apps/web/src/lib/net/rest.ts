@@ -12,7 +12,6 @@
  */
 
 import {
-  BOOK_DEPTH,
   CandlesResponseSchema,
   DepthResponseSchema,
   HISTORY_LIMIT,
@@ -63,10 +62,19 @@ export async function fetchSymbolInfo(signal?: AbortSignal): Promise<SymbolRespo
  */
 export async function fetchDepth(
   symbol: string,
-  limit = BOOK_DEPTH,
+  limit?: number,
   signal?: AbortSignal,
 ): Promise<DepthResponse> {
-  const raw = await getJson(REST_ROUTES.depth, { symbol, limit }, signal);
+  // No limit by default, deliberately. The delta stream covers every price level,
+  // so reconciling against a display-sized snapshot would leave the book missing
+  // levels that later deltas assume exist — and the contiguity check cannot see it,
+  // because the sequence numbers line up perfectly while the book is wrong.
+  // Truncation for display happens on the rendered top-N, not on the source.
+  const raw = await getJson(
+    REST_ROUTES.depth,
+    limit === undefined ? { symbol } : { symbol, limit },
+    signal,
+  );
   const parsed = DepthResponseSchema.safeParse(raw);
   if (!parsed.success) throw new ApiError(`malformed depth response: ${parsed.error.issues[0]?.message}`);
   return parsed.data as DepthResponse;

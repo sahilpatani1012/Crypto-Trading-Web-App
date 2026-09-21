@@ -52,6 +52,18 @@ export interface WsServerOptions {
  */
 const HEARTBEAT_MS = 30_000;
 
+/**
+ * Ceiling on an inbound frame, in bytes.
+ *
+ * `ws` defaults to 100 MiB. Every legitimate frame in this protocol is a few
+ * hundred bytes — the largest is a `subscribe` — so without a cap any client can
+ * send one 100 MB text frame, which `ws` buffers in full and `raw.toString()` then
+ * copies into a JS string, both before the schema is ever consulted. On a 512 MB
+ * container that is a one-frame OOM that takes down every other connection and all
+ * in-memory market state.
+ */
+const MAX_PAYLOAD_BYTES = 16 * 1024;
+
 interface TrackedSocket extends WebSocket {
   isAlive?: boolean;
   sessionId?: string;
@@ -70,7 +82,11 @@ export function createWebSocketServer(options: WsServerOptions): WsServer {
   // `noServer` because we drive the upgrade ourselves: the origin check has to
   // happen before the handshake completes, and rejecting afterwards would mean
   // accepting a connection we intended to refuse.
-  const wss = new WebSocketServer({ noServer: true, clientTracking: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    clientTracking: true,
+    maxPayload: MAX_PAYLOAD_BYTES,
+  });
   const sessions = new Map<string, ClientSession>();
 
   function originAllowed(origin: string | undefined): boolean {
@@ -83,6 +99,16 @@ export function createWebSocketServer(options: WsServerOptions): WsServer {
   }
 
   function handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    // Node removes its own error listener from the socket immediately before
+    // emitting 'upgrade', so this Duplex arrives with none. Every rejection path
+    // below writes to it and destroys it, and a peer that has already reset the
+    // connection turns that write into an 'error' with no listener — which in Node
+    // is an uncaught exception that kills the process. A bot scanning for open
+    // WebSocket endpoints is enough to trigger it.
+    socket.on('error', () => {
+      /* The connection is being refused anyway; there is nothing to recover. */
+    });
+
     let url: URL;
     try {
       url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);

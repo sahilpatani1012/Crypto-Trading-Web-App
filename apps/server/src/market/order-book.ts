@@ -142,14 +142,24 @@ export class OrderBook {
    * says which sequence number this snapshot already includes, so the client knows
    * to discard buffered deltas at or below it and to require the next one at
    * exactly `lastUpdateId + 1`.
+   *
+   * `limit` truncates for display. Leave it undefined for reconciliation.
+   *
+   * A truncated snapshot is not a smaller correct book — it is a wrong one. The
+   * delta stream covers every level, so a client that started from the top 20 would
+   * be missing levels that later deltas assume exist, and its contiguity check
+   * cannot see that: the sequence numbers line up perfectly while the book is wrong.
+   * Note the book holds more levels than `depth`, because a band may contain more
+   * than one price.
    */
-  snapshot(symbol: string, ts: number, limit = this.opts.depth): DepthSnapshot {
+  snapshot(symbol: string, ts: number, limit?: number): DepthSnapshot {
+    const take = limit ?? Number.MAX_SAFE_INTEGER;
     return {
       symbol,
       lastUpdateId: this.seq,
       ts,
-      bids: sortLevels(this.bids, 'desc').slice(0, limit),
-      asks: sortLevels(this.asks, 'asc').slice(0, limit),
+      bids: sortLevels(this.bids, 'desc').slice(0, take),
+      asks: sortLevels(this.asks, 'asc').slice(0, take),
     };
   }
 

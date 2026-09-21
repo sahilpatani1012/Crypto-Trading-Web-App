@@ -311,6 +311,40 @@ describe('TierController — the debug override (D-013)', () => {
     expect(controller.active()).toBe('minimal');
   });
 
+  it('does not erase the dwell clock when releasing an override that was never set', () => {
+    // `setTier: null` is unauthenticated and rate-unlimited. Rewinding the dwell
+    // clock unconditionally let any client defeat one of the two hysteresis
+    // mechanisms from the outside — and each resulting tier change tears down and
+    // recreates the delivery timer.
+    const { controller, clock } = setup();
+
+    reportAfterDwell(controller, clock, 300);
+    expect(controller.active()).toBe('degraded');
+
+    // Immediately release an override that never existed, then report a score that
+    // would promote if dwell had been reset.
+    controller.setForced(null);
+    controller.onReport(scoreOf(10));
+
+    expect(controller.active()).toBe('degraded');
+  });
+
+  it('does reset dwell when a real override is released', () => {
+    const { controller, clock } = setup();
+
+    reportAfterDwell(controller, clock, 300);
+    expect(controller.active()).toBe('degraded');
+
+    controller.setForced('minimal');
+    controller.setForced(null);
+
+    // A genuine release resumes automatic control at once rather than serving out a
+    // dwell window that elapsed while the machine was not in charge — so this good
+    // report promotes immediately instead of being held.
+    controller.onReport(scoreOf(10));
+    expect(controller.active()).toBe('full');
+  });
+
   it('applies a tier forced at connect time', () => {
     const { controller } = setup('degraded');
     expect(controller.active()).toBe('degraded');

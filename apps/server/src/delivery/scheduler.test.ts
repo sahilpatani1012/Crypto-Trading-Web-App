@@ -135,8 +135,9 @@ describe('DeliveryScheduler — candles are snapshots, not patches (D-009)', () 
 
     // One frame, carrying the whole truth. A queue would be keeping garbage.
     expect(flushes).toHaveLength(1);
-    expect(flushes[0]!.candle!.candle.c).toBe(103);
-    expect(flushes[0]!.candle!.candle.n).toBe(3);
+    expect(flushes[0]!.candles).toHaveLength(1);
+    expect(flushes[0]!.candles[0]!.candle.c).toBe(103);
+    expect(flushes[0]!.candles[0]!.candle.n).toBe(3);
 
     scheduler.stop();
   });
@@ -154,8 +155,8 @@ describe('DeliveryScheduler — candles are snapshots, not patches (D-009)', () 
 
     // No timer advance at all.
     expect(flushes).toHaveLength(1);
-    expect(flushes[0]!.candle!.closed).toBe(true);
-    expect(flushes[0]!.candle!.candle.c).toBe(107);
+    expect(flushes[0]!.candles[0]!.closed).toBe(true);
+    expect(flushes[0]!.candles[0]!.candle.c).toBe(107);
 
     scheduler.stop();
   });
@@ -170,6 +171,67 @@ describe('DeliveryScheduler — candles are snapshots, not patches (D-009)', () 
     expect(flushes).toHaveLength(1);
     expect(flushes[0]!.trades).toHaveLength(1);
     expect(flushes[0]!.book).not.toBeNull();
+
+    scheduler.stop();
+  });
+});
+
+describe('DeliveryScheduler — a close survives backpressure', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * The defect this guards against.
+   *
+   * A closed candle flushes immediately — but that flush can be refused for
+   * backpressure, and it used to return without clearing the single pending slot.
+   * Within the same engine tick the next bucket's opening frame then overwrote the
+   * close, which was therefore never sent at all. The client permanently recorded
+   * whatever intermediate frame it last saw as that bar's final value.
+   *
+   * Both behaviours were tested, separately. Neither test composed them.
+   */
+  it('does not lose a closed candle whose immediate flush was refused', () => {
+    let buffered = 0;
+    const { scheduler, flushes } = makeScheduler(1_000, () => buffered);
+
+    scheduler.queueCandle(candle(1_000, 105, 8), '1s', false);
+
+    // The socket has not drained, so the close's immediate flush is skipped...
+    buffered = 10_000_000;
+    scheduler.queueCandle(candle(1_000, 111, 9), '1s', true);
+    expect(flushes).toHaveLength(0);
+
+    // ...and the next bucket opens in the very same engine tick.
+    scheduler.queueCandle(candle(2_000, 111, 0), '1s', false);
+
+    buffered = 0;
+    vi.advanceTimersByTime(1_000);
+
+    const delivered = flushes.flatMap((f) => f.candles);
+    const closed = delivered.filter((c) => c.closed);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.candle.t).toBe(1_000);
+    expect(closed[0]!.candle.c).toBe(111);
+
+    scheduler.stop();
+  });
+
+  it('collapses repeated updates to one bucket but keeps two distinct buckets', () => {
+    const { scheduler, flushes } = makeScheduler(1_000);
+
+    scheduler.queueCandle(candle(1_000, 101, 1), '1s', false);
+    scheduler.queueCandle(candle(1_000, 104, 2), '1s', false);
+    scheduler.queueCandle(candle(2_000, 106, 1), '1s', false);
+
+    vi.advanceTimersByTime(1_000);
+
+    const delivered = flushes[0]!.candles;
+    expect(delivered).toHaveLength(2);
+    // Oldest first: applying them in order must never move a bar backwards.
+    expect(delivered[0]!.candle.t).toBe(1_000);
+    expect(delivered[0]!.candle.c).toBe(104);
+    expect(delivered[1]!.candle.t).toBe(2_000);
 
     scheduler.stop();
   });

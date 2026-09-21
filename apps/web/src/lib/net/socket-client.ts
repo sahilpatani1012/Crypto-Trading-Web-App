@@ -116,6 +116,23 @@ const OPEN = 1;
  */
 const STATS_EMIT_INTERVAL_MS = 1_000;
 
+/**
+ * Round-trip times above this are not measurements.
+ *
+ * A frozen background tab delivers its queued pong on resume, which measures the
+ * freeze rather than the network. So does a forward clock step.
+ */
+const MAX_PLAUSIBLE_RTT_MS = 30_000;
+
+/**
+ * Samples required before the client is willing to report.
+ *
+ * The jitter estimator needs several samples to mean anything, and `latency.reset()`
+ * runs on every reconnect — so a one- or two-sample report systematically understates
+ * a bad connection, which is precisely the connection that reconnects most often.
+ */
+const MIN_SAMPLES_TO_REPORT = 3;
+
 export class SocketClient {
   private readonly opts: SocketClientOptions;
   private readonly now: () => number;
@@ -309,15 +326,28 @@ export class SocketClient {
 
     if (frame.t === 'pong') {
       this.lastPongAt = now;
-      this.latency.addSample(now - frame.clientTime);
+
+      // A pong that was queued while the page was frozen is delivered on resume and
+      // measures the freeze, not the network — minutes, not milliseconds. Folding
+      // that into an EWMA drags the reported latency into the tens of seconds and
+      // dumps the connection to `minimal` for a minute afterwards. Above this bound
+      // it is not a measurement. The same guard covers a forward clock step, which
+      // `LatencyMeter`'s negative check cannot see.
+      const rtt = now - frame.clientTime;
+      if (rtt <= MAX_PLAUSIBLE_RTT_MS) this.latency.addSample(rtt);
+
       this.emitNetStats(now);
     }
 
     // Chart updates are what the tier system rate-limits, so they are what the
-    // measured rate counts. Including pongs and tier echoes would inflate it with
-    // traffic that is not subject to the cadence.
+    // measured rate counts — but only the *scheduled* ones.
+    //
+    // A closed candle is flushed immediately, bypassing the cadence by design, so
+    // counting it would mix two different things and push the measured rate above
+    // its own ceiling. At minimal tier that read "2.0 / 1 Hz": the one number meant
+    // to prove the coalescer works was reporting double its target.
     if (frame.t === 'candle') {
-      this.rate.mark(now);
+      if (!frame.closed) this.rate.mark(now);
       this.emitNetStats(now);
     }
 
@@ -413,9 +443,10 @@ export class SocketClient {
 
   private onReportTick(): void {
     if (this.disposed || this.status !== 'open') return;
-    if (!this.latency.hasSample()) return;
+    const stats = this.latency.stats();
+    if (stats.samples < MIN_SAMPLES_TO_REPORT) return;
     // The client measures and reports; the server owns the tier decision.
-    this.send({ t: 'netreport', ...this.latency.stats() });
+    this.send({ t: 'netreport', ...stats });
   }
 
   private clearIntervalTimers(): void {
@@ -454,6 +485,15 @@ export class SocketClient {
   private installVisibilityHandler(): void {
     if (typeof document === 'undefined' || this.visibilityHandler !== null) return;
 
+    // Seed from the current state, not only from future events. A page opened
+    // directly into a background tab — a ctrl-click, or a remount while hidden —
+    // never fires `visibilitychange`, so `hiddenAt` stayed null and the heartbeat's
+    // throttle guard was disabled. Chrome then throttles timers to ~1/min, the last
+    // pong always looks older than the six-second timeout, and the client tears down
+    // a healthy socket roughly once a minute — each time refetching the book and the
+    // whole candle history, forever, because onOpen resets the backoff.
+    if (document.visibilityState !== 'visible') this.hiddenAt = this.now();
+
     this.visibilityHandler = () => {
       if (this.disposed) return;
 
@@ -490,9 +530,21 @@ export class SocketClient {
   // Reporting out
   // -------------------------------------------------------------------------
 
+  private lastReportedAttempt = -1;
+
+  /**
+   * Report status, and also report a changed attempt count at the same status.
+   *
+   * Suppressing on the status string alone was a real defect: from the second
+   * reconnect attempt onward the string stays `'reconnecting'`, so the store never
+   * learned the growing attempt number or the new retry delay. After a ten-minute
+   * outage the banner still read "attempt 1" with a 500 ms retry while the real
+   * wait was fifteen seconds.
+   */
   private setStatus(status: ConnectionStatus): void {
-    if (this.status === status) return;
+    if (this.status === status && this.attempt === this.lastReportedAttempt) return;
     this.status = status;
+    this.lastReportedAttempt = this.attempt;
     this.opts.onStatus?.(status, {
       attempt: this.attempt,
       retryInMs: this.retryAt === null ? null : Math.max(0, this.retryAt - this.now()),

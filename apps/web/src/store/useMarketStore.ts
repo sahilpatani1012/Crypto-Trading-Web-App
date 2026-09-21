@@ -160,12 +160,21 @@ export const useMarketStore = create<MarketState & MarketActions>((set) => ({
         return dropped > 0 ? { tapeDropped: state.tapeDropped + dropped } : {};
       }
       const last = trades[trades.length - 1]!;
+      // Only move `previousPrice` when the price actually moved.
+      //
+      // The candle frame of the same flush is sent first and already applied
+      // `setLastPrice(candle.c)` — and a candle's close IS the last trade's price.
+      // So unconditionally copying `lastPrice` into `previousPrice` here made the
+      // two equal on essentially every flush, and the up/down arrow was dead 93% of
+      // the time on a screen whose spec requires showing "the latest price and its
+      // movement".
+      const moved = last.p !== state.lastPrice;
       return {
         // Newest first, bounded. An unbounded tape is a slow memory leak that only
         // shows up after the demo is over.
         tape: [...trades].reverse().concat(state.tape).slice(0, TAPE_LENGTH),
         tapeDropped: state.tapeDropped + dropped,
-        previousPrice: state.lastPrice,
+        previousPrice: moved ? state.lastPrice : state.previousPrice,
         lastPrice: last.p,
         lastUpdateAt: at,
       };

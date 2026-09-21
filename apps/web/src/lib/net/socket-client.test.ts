@@ -89,13 +89,21 @@ class FakeSocket implements WebSocketLike {
 
 interface Recorded {
   statuses: string[];
+  /** The full detail, not only the status string — the attempt bug hid in here. */
+  statusDetails: Array<{ status: string; attempt: number; retryInMs: number | null }>;
   resyncs: ResyncReason[];
   frames: ServerFrame[];
   malformed: string[];
 }
 
 function makeClient(overrides: { random?: () => number } = {}) {
-  const recorded: Recorded = { statuses: [], resyncs: [], frames: [], malformed: [] };
+  const recorded: Recorded = {
+    statuses: [],
+    statusDetails: [],
+    resyncs: [],
+    frames: [],
+    malformed: [],
+  };
   let now = 1_000_000;
 
   const client = new SocketClient({
@@ -105,7 +113,10 @@ function makeClient(overrides: { random?: () => number } = {}) {
     createSocket: (url) => new FakeSocket(url),
     now: () => now,
     random: overrides.random ?? (() => 0.5),
-    onStatus: (status) => recorded.statuses.push(status),
+    onStatus: (status, detail) => {
+      recorded.statuses.push(status);
+      recorded.statusDetails.push({ status, ...detail });
+    },
     onResync: (reason) => recorded.resyncs.push(reason),
     onFrame: (frame) => recorded.frames.push(frame),
     onMalformed: (reason) => recorded.malformed.push(reason),
@@ -346,6 +357,110 @@ describe('SocketClient — detecting a dead connection', () => {
   });
 });
 
+describe('SocketClient — reporting reconnect progress', () => {
+  /**
+   * The status string stays `'reconnecting'` across every attempt, so suppressing
+   * the callback on the string alone meant the store never learned the growing
+   * attempt count or the new retry delay. The banner read "attempt 1" with a 500 ms
+   * retry after a ten-minute outage. The old harness recorded only the string, which
+   * is why no test caught it.
+   */
+  it('reports every reconnect attempt, not only the first', () => {
+    const { client, recorded, advance } = makeClient({ random: () => 1 });
+    client.connect();
+    FakeSocket.latest().accept();
+
+    for (let i = 0; i < 5; i += 1) {
+      FakeSocket.latest().serverClose();
+      advance(RECONNECT_CAP_MS + 100);
+    }
+
+    const attempts = recorded.statusDetails
+      .filter((d) => d.status === 'reconnecting')
+      .map((d) => d.attempt);
+
+    expect(attempts.length).toBeGreaterThanOrEqual(5);
+    expect(Math.max(...attempts)).toBeGreaterThanOrEqual(5);
+    // Strictly increasing, not stuck at 1.
+    expect(new Set(attempts).size).toBeGreaterThan(1);
+
+    client.dispose();
+  });
+
+  it('reports a growing retry delay', () => {
+    const { client, recorded, advance } = makeClient({ random: () => 1 });
+    client.connect();
+    FakeSocket.latest().accept();
+
+    for (let i = 0; i < 4; i += 1) {
+      FakeSocket.latest().serverClose();
+      advance(RECONNECT_CAP_MS + 100);
+    }
+
+    const delays = recorded.statusDetails
+      .filter((d) => d.status === 'reconnecting' && d.retryInMs !== null)
+      .map((d) => d.retryInMs!);
+
+    expect(delays.length).toBeGreaterThan(2);
+    expect(Math.max(...delays)).toBeGreaterThan(Math.min(...delays));
+
+    client.dispose();
+  });
+});
+
+describe('SocketClient — measurement sanity', () => {
+  it('ignores a pong that measures a frozen tab rather than the network', () => {
+    const { client, advance, getNow } = makeClient();
+    client.connect();
+    const ws = FakeSocket.latest();
+    ws.accept();
+
+    for (let i = 0; i < 6; i += 1) {
+      const ping = ws.framesOfType('ping').at(-1)!;
+      ws.deliver({ t: 'pong', id: ping.id, clientTime: getNow() - 40, serverTime: 0 });
+      advance(PING_INTERVAL_MS);
+    }
+    const before = ws.framesOfType('netreport').at(-1)!.latencyMs;
+
+    // A pong queued during a three-minute freeze, delivered on resume.
+    ws.deliver({ t: 'pong', id: 99, clientTime: getNow() - 180_000, serverTime: 0 });
+    advance(REPORT_INTERVAL_MS);
+
+    const after = ws.framesOfType('netreport').at(-1)!.latencyMs;
+    // Without the bound this would be ~36,000ms and the server would drop the
+    // connection to minimal for the next minute.
+    expect(after).toBeLessThan(before * 2);
+    expect(after).toBeLessThan(200);
+
+    client.dispose();
+  });
+
+  it('waits for several samples before reporting', () => {
+    const { client, advance, getNow } = makeClient();
+    client.connect();
+    const ws = FakeSocket.latest();
+    ws.accept();
+
+    // One sample is not a measurement — and `latency.reset()` on every reconnect
+    // means a one-sample report systematically understates a bad connection, which
+    // is exactly the connection that reconnects most often.
+    const first = ws.framesOfType('ping').at(-1)!;
+    ws.deliver({ t: 'pong', id: first.id, clientTime: getNow() - 400, serverTime: 0 });
+    advance(REPORT_INTERVAL_MS + 100);
+    expect(ws.framesOfType('netreport')).toHaveLength(0);
+
+    for (let i = 0; i < 4; i += 1) {
+      const ping = ws.framesOfType('ping').at(-1)!;
+      ws.deliver({ t: 'pong', id: ping.id, clientTime: getNow() - 400, serverTime: 0 });
+      advance(PING_INTERVAL_MS);
+    }
+    advance(REPORT_INTERVAL_MS);
+    expect(ws.framesOfType('netreport').length).toBeGreaterThan(0);
+
+    client.dispose();
+  });
+});
+
 describe('SocketClient — resynchronising after a gap', () => {
   it('raises a resync when the connection opens', () => {
     const { client, recorded } = makeClient();
@@ -545,6 +660,27 @@ describe('SocketClient — tab visibility', () => {
 
     // A returning user should not wait fifteen seconds for the next attempt.
     expect(FakeSocket.instances.length).toBeGreaterThan(before);
+    client.dispose();
+  });
+
+  it('seeds hiddenAt when the page loads straight into a background tab', () => {
+    // A ctrl-clicked link, or a remount while hidden, never fires
+    // `visibilitychange` — so reading the state only inside the listener left the
+    // heartbeat's throttle guard disabled. Chrome then throttles timers to ~1/min,
+    // the last pong always looks stale, and the client tore down a healthy socket
+    // about once a minute, refetching the book and the whole candle history each
+    // time, forever, because onOpen resets the backoff.
+    doc.visibilityState = 'hidden';
+
+    const { client, advance } = makeClient();
+    client.connect();
+    FakeSocket.latest().accept();
+
+    advance(HEARTBEAT_TIMEOUT_MS + 60_000);
+
+    expect(client.getStatus()).toBe('open');
+    expect(FakeSocket.instances).toHaveLength(1);
+
     client.dispose();
   });
 

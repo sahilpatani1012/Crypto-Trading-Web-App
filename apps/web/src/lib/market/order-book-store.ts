@@ -134,6 +134,23 @@ export class OrderBookStore {
    */
   start(reason: SyncReason = 'initial'): void {
     if (this.disposed) return;
+
+    // On a reconnect the held book describes a market from before the outage, and
+    // the UI is already back to `open` by the time this runs — so republishing it
+    // would render pre-disconnect levels at full opacity, with a live-looking
+    // spread, for the whole snapshot round trip. That is exactly the "mixture of old
+    // and new" the resync is supposed to prevent.
+    //
+    // A gap-triggered resync deliberately keeps its levels: only one update was
+    // missed, so the book is very nearly right, and blanking it would be a worse lie
+    // than a brief near-miss.
+    if (reason === 'reconnect') {
+      this.bids.clear();
+      this.asks.clear();
+      this.lastSeq = 0;
+      this.buffer = [];
+    }
+
     this.requestSnapshot(reason, reason === 'gap' ? 'resyncing' : 'snapshotting');
   }
 

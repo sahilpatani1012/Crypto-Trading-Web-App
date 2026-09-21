@@ -51,6 +51,7 @@ import {
 } from 'lightweight-charts';
 import {
   HISTORY_LIMIT,
+  INTERVALS,
   formatPrice,
   formatQty,
   toFloatPrice,
@@ -338,8 +339,16 @@ export const CandleChart = forwardRef<CandleChartHandle, CandleChartProps>(
           lastBarRef.current = time;
 
           // Bounded: at 1s bars this would otherwise grow by 3,600 entries an hour.
+          //
+          // The cutoff must be in the *interval's* units. It used to be
+          // `HISTORY_LIMIT * 60`, which only works if a bar is a minute: at 1s the
+          // trigger fired at 1,201 entries but the cutoff reached ten hours back, so
+          // nothing was ever deleted until ~36,000 entries — and the loop rescanned
+          // every key on the 10 Hz path, deleting nothing, on the exact path that
+          // exists to stay smooth.
           if (volumesRef.current.size > HISTORY_LIMIT * 2) {
-            const cutoff = time - HISTORY_LIMIT * 60;
+            const intervalSeconds = INTERVALS[intervalRef.current] / 1_000;
+            const cutoff = time - HISTORY_LIMIT * intervalSeconds;
             for (const key of volumesRef.current.keys()) {
               if (key < cutoff) volumesRef.current.delete(key);
             }

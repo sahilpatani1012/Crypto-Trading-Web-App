@@ -188,6 +188,24 @@ describe('OrderBook — the no-cross invariant', () => {
     }
   });
 
+  it('returns the COMPLETE book when no limit is given', () => {
+    // A truncated snapshot is not a smaller correct book, it is a wrong one: the
+    // delta stream covers every level, so a client starting from the top 20 would be
+    // missing levels that later deltas assume exist — and its contiguity check
+    // cannot detect that, because the sequence numbers line up perfectly.
+    const { engine, clock } = makeEngine();
+    run(engine, clock, 5_000);
+
+    const full = engine.snapshot();
+    const truncated = engine.snapshot(10);
+
+    expect(full.bids.length).toBeGreaterThan(truncated.bids.length);
+    expect(truncated.bids).toHaveLength(10);
+    // The book genuinely holds more levels than `depth`, because a band may contain
+    // more than one price — which is exactly why the default must not truncate.
+    expect(full.bids.length).toBeGreaterThanOrEqual(10);
+  });
+
   it('maintains at least the display depth on both sides', () => {
     const { engine, clock } = makeEngine();
     run(engine, clock, 3_000);

@@ -190,6 +190,16 @@ export class ClientSession {
     this.scheduler?.stop();
     this.scheduler = null;
 
+    // Close the socket too. When the session closes itself — a failed send — the
+    // transport's 'close' handler is what removes it from the connection registry,
+    // and that only fires if the socket actually closes. Without this the entry
+    // leaks and /health over-reports connections.
+    try {
+      this.socket.close();
+    } catch {
+      /* Already closing. */
+    }
+
     this.log('session closed', {
       id: this.id,
       framesSent: this.framesSent,
@@ -294,13 +304,13 @@ export class ClientSession {
   private onFlush(payload: FlushPayload): void {
     const symbol = this.engine.symbol;
 
-    if (payload.candle !== null) {
+    for (const pending of payload.candles) {
       this.send({
         t: 'candle',
         symbol,
-        interval: payload.candle.interval,
-        candle: payload.candle.candle,
-        closed: payload.candle.closed,
+        interval: pending.interval,
+        candle: pending.candle,
+        closed: pending.closed,
       });
     }
 

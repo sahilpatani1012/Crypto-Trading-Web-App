@@ -283,6 +283,7 @@ export class MarketEngine {
   // Reads
   // -------------------------------------------------------------------------
 
+  /** Omit `limit` for a complete book; pass one only for a display-sized view. */
   snapshot(limit?: number): DepthSnapshot {
     return this.book.snapshot(this.symbol, this.clock.now(), limit);
   }

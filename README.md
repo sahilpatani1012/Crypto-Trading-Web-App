@@ -37,7 +37,7 @@ No `.env` file is required — every value has a local default. See
 `apps/server/.env.example` and `apps/web/.env.example` for what can be overridden.
 
 ```bash
-npm test          # 181 tests
+npm test          # 192 tests
 npm run typecheck # all three packages
 npm run build     # production build of both apps
 ```
@@ -95,9 +95,14 @@ app/ + components/  →  store/  →  lib/
 ```
 
 Nothing in `lib/` imports React, which is what makes the networking, the order book
-reconciliation and the latency maths testable with no DOM and no network. The whole
-app has **one** `'use client'` boundary, on `TradingPanel`; everything above it is a
-Server Component and ships no JavaScript.
+reconciliation and the latency maths testable with no DOM and no network.
+
+There is **one client boundary in the tree**: `page.tsx` and `layout.tsx` are Server
+Components and ship no JavaScript, and `TradingPanel` is the only component they
+render that is a Client Component. Everything below it is client-side too and carries
+its own `'use client'` directive — nine files in total — which is how the directive
+works rather than a second boundary. The point is that the static shell costs nothing
+and the interactive subtree is explicit and contained.
 
 **Next.js App Router** was chosen over the Pages Router. The honest assessment: the
 benefit here is modest, because nearly everything on this screen is genuinely
@@ -162,9 +167,12 @@ and a recorded demo reproducible. Nothing external is required.
   a sell at the best bid, so consecutive prints bounce across the spread the way a
   real tape does. Sizes are log-normal: mostly small, occasionally large, never
   negative.
-- **Order book** — 20 levels a side, organised into concentric price bands widening as
-  `4 × slot^1.8` ticks. Levels rest across ticks and are pruned when the mid crosses
-  them or they drift past the outermost band. `bestBid < bestAsk` is enforced
+- **Order book** — 20 concentric price bands a side, widening as `4 × slot^1.8`
+  ticks. Replenishment fills empty bands, so the book holds *at least* 20 levels a
+  side and usually more, since a band may contain more than one price. Levels rest
+  across ticks and are pruned when the mid crosses them or they drift past the
+  outermost band. `/api/depth` therefore returns the complete book by default —
+  truncating it would hand the client a snapshot the delta stream does not match. `bestBid < bestAsk` is enforced
   structurally and asserted after every tick, including under 20× volatility — a
   crossed book renders perfectly normally while describing a market where risk-free
   arbitrage exists.
@@ -618,7 +626,7 @@ handler is effectively disabled.
 ## Testing
 
 ```bash
-npm test     # 181 tests
+npm test     # 192 tests
 ```
 
 Three kinds, deliberately:
@@ -632,13 +640,13 @@ Three kinds, deliberately:
 
 The two the brief specifically recommends:
 
-- **Tier changes and hysteresis** (`tier-controller.test.ts`, 25 tests) — a score
+- **Tier changes and hysteresis** (`tier-controller.test.ts`, 27 tests) — a score
   oscillating inside the deadband does not move the tier; a score parked exactly on a
   threshold produces zero changes across 40 evaluations; a score swinging wildly every
   second is rate-limited by dwell; demotion skips a tier while promotion does not;
   silence demotes progressively and stops at the floor; an override pins `active`
   while `auto` keeps updating.
-- **Order book snapshot/delta sync and recovery** (`order-book-store.test.ts`, 23
+- **Order book snapshot/delta sync and recovery** (`order-book-store.test.ts`, 24
   tests) — deltas buffered during an in-flight snapshot are filtered correctly; a
   coalesced delta straddling the boundary is applied whole; a gap triggers a resync
   without closing the socket; after recovery the client's book equals an independently
@@ -682,4 +690,25 @@ simulated trading in about 1.5 seconds with no sleeps and no flakiness.
   it.
 - **Watchlist reordering** (a stated bonus) is not built. Scoped out against a
   three-day budget in favour of finishing the graded requirements.
-- **Render free tier cold starts.** Documented above.
+- **Render free tier cold starts.** Documented above. Warmup also runs before
+  `listen()`, so the first ~1.5 s after a cold start refuses connections — negligible
+  against the platform's own 30–50 s wake, but it would be wrong on a real host.
+- **A client can flood the inline-response path.** `send` checks that the socket is
+  open but not how much is already buffered; the backpressure guard lives only in the
+  delivery scheduler. A client that never drains while looping `ping` or `subscribe`
+  would grow its own session's buffer without bound. Rate limiting and a per-session
+  byte cap are the fix.
+- **A starved process replays its whole candle gap at once.** Tick catch-up is capped,
+  but the aggregators then synthesise one closed candle per missed bucket in a single
+  synchronous call — and each close flushes immediately by design. After a long
+  suspend that is thousands of frames in one event-loop turn.
+- **`force book gap` is a no-op under backpressure.** It flushes before arming so the
+  pending sequence range is closed, but that flush is skipped when the socket has not
+  drained, and the dropped delta is then swallowed by the still-open merge range.
+- **Level-application helpers are duplicated** between `server/market/order-book.ts`
+  and `web/lib/market/order-book-store.ts`. That is worse than ordinary duplication:
+  the server-side round-trip test that is meant to prove "snapshot plus deltas
+  reproduces the server's book" is verifying a *copy* of the client's logic rather
+  than the client's logic. They belong in `packages/protocol`.
+- **The client ignores `error` frames.** A rejected subscribe leaves the status pill
+  green with no data arriving, rather than saying what went wrong.

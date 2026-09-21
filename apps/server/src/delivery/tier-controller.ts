@@ -89,6 +89,8 @@ export class TierController {
 
   private auto: Tier = 'full';
   private forced: Tier | null;
+  /** What `forced` held before the current call, so a no-op release is detectable. */
+  private forcedBefore: Tier | null = null;
 
   private latencyMs = 0;
   private jitterMs = 0;
@@ -173,13 +175,21 @@ export class TierController {
    */
   setForced(tier: Tier | null): TierChange {
     const before = this.active();
+    this.forcedBefore = this.forced;
     this.forced = tier;
 
     if (tier === null) {
       // Resume automatic control with dwell already elapsed, so the next report
       // acts immediately rather than serving out a dwell period that passed while
       // the tier was pinned and the machine was not in charge.
-      this.lastChangeAt = this.clock.now() - this.dwellMs;
+      //
+      // Guarded on an override having actually been active. Without the guard, a
+      // client could send `setTier: null` repeatedly to erase the dwell clock at
+      // will — defeating one of the two hysteresis mechanisms from the outside, and
+      // churning the delivery timer on every change.
+      if (this.forcedBefore !== null) {
+        this.lastChangeAt = this.clock.now() - this.dwellMs;
+      }
       this.reason = 'override cleared';
     } else {
       this.reason = `forced to ${tier}`;

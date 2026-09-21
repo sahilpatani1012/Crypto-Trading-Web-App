@@ -56,8 +56,21 @@ import {
   asTick,
 } from '@cta/protocol';
 
+export interface PendingCandle {
+  candle: Candle;
+  interval: IntervalId;
+  closed: boolean;
+}
+
 export interface FlushPayload {
-  candle: { candle: Candle; interval: IntervalId; closed: boolean } | null;
+  /**
+   * Zero or more candles, oldest bucket first.
+   *
+   * Usually exactly one — the open bar, overwritten in place. It is a list rather
+   * than a single slot so a *closed* bucket can never be erased by the next
+   * bucket's opening frame. See `queueCandle`.
+   */
+  candles: PendingCandle[];
   trades: Trade[];
   droppedTrades: number;
   book: BookDelta | null;
@@ -84,7 +97,8 @@ export class DeliveryScheduler {
   private periodMs: number;
   private stopped = false;
 
-  private pendingCandle: { candle: Candle; interval: IntervalId; closed: boolean } | null = null;
+  /** Keyed by bucket start, so one bucket's updates collapse but two do not. */
+  private pendingCandles = new Map<number, PendingCandle>();
   private pendingTrades: Trade[] = [];
   private droppedTrades = 0;
   private pendingBids = new Map<number, number>();
@@ -116,7 +130,19 @@ export class DeliveryScheduler {
    */
   queueCandle(candle: Candle, interval: IntervalId, closed: boolean): void {
     if (this.stopped) return;
-    this.pendingCandle = { candle, interval, closed };
+
+    // Keyed by bucket. Repeated updates to the same bar collapse — which is the
+    // whole point of a snapshot payload — but a different bucket appends.
+    //
+    // This used to be a single slot, and that was a real defect: an immediate close
+    // flush can be refused for backpressure, which returns without clearing the
+    // slot, and the next bucket's opening frame then overwrote the close in the same
+    // engine tick. The close was never sent, and the client permanently recorded
+    // whatever intermediate frame it last saw as that bar's final value — precisely
+    // the failure the immediate flush exists to prevent, and it bit the slow-tier
+    // clients the whole feature is for.
+    this.pendingCandles.set(candle.t, { candle, interval, closed });
+
     if (closed) this.flush();
   }
 
@@ -175,7 +201,7 @@ export class DeliveryScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
-    this.pendingCandle = null;
+    this.pendingCandles.clear();
     this.pendingTrades = [];
     this.pendingBids.clear();
     this.pendingAsks.clear();
@@ -214,13 +240,15 @@ export class DeliveryScheduler {
     }
 
     const payload: FlushPayload = {
-      candle: this.pendingCandle,
+      // Oldest bucket first, so a client applying them in order never moves a bar
+      // backwards — `series.update()` throws on an out-of-order timestamp.
+      candles: [...this.pendingCandles.values()].sort((a, b) => a.candle.t - b.candle.t),
       trades: this.pendingTrades,
       droppedTrades: this.droppedTrades,
       book: this.takeBookDelta(),
     };
 
-    this.pendingCandle = null;
+    this.pendingCandles.clear();
     this.pendingTrades = [];
     this.droppedTrades = 0;
     this.flushCount += 1;
@@ -230,7 +258,7 @@ export class DeliveryScheduler {
 
   private hasPending(): boolean {
     return (
-      this.pendingCandle !== null ||
+      this.pendingCandles.size > 0 ||
       this.pendingTrades.length > 0 ||
       this.pendingBids.size > 0 ||
       this.pendingAsks.size > 0

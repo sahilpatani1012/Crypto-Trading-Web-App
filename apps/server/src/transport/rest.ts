@@ -13,7 +13,6 @@
 
 import type { FastifyInstance } from 'fastify';
 import {
-  BOOK_DEPTH,
   HISTORY_LIMIT,
   REST_ROUTES,
   CandlesQuerySchema,
@@ -74,7 +73,11 @@ export function registerRestRoutes(app: FastifyInstance, deps: RestDeps): void {
       return reply.code(404).send(badRequest(`unknown symbol ${symbol}`));
     }
 
-    const snapshot: DepthResponse = engine.snapshot(limit ?? BOOK_DEPTH);
+    // Defaults to the COMPLETE book, not the display depth. The delta stream covers
+    // every level, so a client reconciling against a truncated snapshot would be
+    // missing levels that later deltas assume exist — and its contiguity check
+    // cannot detect that, because the sequence numbers line up perfectly.
+    const snapshot: DepthResponse = engine.snapshot(limit);
     return reply.send(snapshot);
   });
 
