@@ -18,13 +18,14 @@ import { INTERVAL_IDS, type IntervalId } from '@cta/protocol';
 import { useMarketConnection } from '@/hooks/useMarketConnection';
 import { useMarketStore, selectStale } from '@/store/useMarketStore';
 import { ConnectionBanner } from './ConnectionBanner';
+import { OrderBook } from './OrderBook';
 import { PriceHeader } from './PriceHeader';
 import { TierPanel } from './TierPanel';
 import { TradeTape } from './TradeTape';
 
 export function TradingPanel() {
-  // Consumers that need to rebuild after a gap register here. Nothing does yet;
-  // the order book and the chart attach in the next two slices.
+  // The order book rebuilds itself inside the connection hook, which owns it. The
+  // chart attaches here in the next slice.
   const handleResync = useCallback(() => {}, []);
 
   useMarketConnection({ onResync: handleResync });
@@ -39,7 +40,11 @@ export function TradingPanel() {
       </div>
 
       <TierPanel />
-      <TradeTape />
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <OrderBook />
+        <TradeTape />
+      </div>
     </div>
   );
 }

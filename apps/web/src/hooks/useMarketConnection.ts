@@ -16,10 +16,12 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { IntervalId, ServerFrame } from '@cta/protocol';
+import { BOOK_DISPLAY_DEPTH, type IntervalId, type ServerFrame } from '@cta/protocol';
 
-import { API_URL, WS_URL, assertSecureTransport } from '@/lib/config';
+import { assertSecureTransport, WS_URL } from '@/lib/config';
+import { fetchDepth, fetchSymbolInfo } from '@/lib/net/rest';
 import { SocketClient, type ResyncReason } from '@/lib/net/socket-client';
+import { OrderBookStore } from '@/lib/market/order-book-store';
 import { useMarketStore } from '@/store/useMarketStore';
 
 export interface MarketConnectionHandlers {
@@ -47,6 +49,23 @@ export function useMarketConnection(handlers: MarketConnectionHandlers = {}): vo
 
     const store = useMarketStore.getState();
 
+    /**
+     * The order book lives here rather than in a component, because it is part of
+     * "being connected to the market": it has to receive every delta in order, and
+     * it has to rebuild whenever the connection does. Only its top-N ever reaches
+     * React.
+     */
+    const book = new OrderBookStore({
+      fetchSnapshot: (signal) => fetchDepth(store.symbol, undefined, signal),
+      onChange: () => publishBook(),
+      onState: () => publishBook(),
+    });
+
+    const publishBook = () => {
+      const { bids, asks } = book.top(BOOK_DISPLAY_DEPTH);
+      useMarketStore.getState().setBook(bids, asks, book.stats());
+    };
+
     const client = new SocketClient({
       url: WS_URL,
       symbol: store.symbol,
@@ -68,10 +87,17 @@ export function useMarketConnection(handlers: MarketConnectionHandlers = {}): vo
         // Drop cached market values: they are about to be replaced, and showing a
         // mixture of old and new during the refetch would be its own kind of lie.
         useMarketStore.getState().reset();
+        // Rebuild the book from a fresh snapshot rather than waiting for gap
+        // detection to notice. We already know updates were missed; starting now
+        // saves a round trip and a window of showing a knowingly stale book.
+        book.start(reason === 'reconnect' ? 'reconnect' : 'initial');
         handlersRef.current.onResync?.(reason, interval);
       },
 
       onFrame: (frame) => {
+        // Book deltas go to the reconciler, never to React. Only the derived top-N
+        // is published, and only when the visible book actually changed.
+        if (frame.t === 'book') book.applyDelta(frame.delta);
         routeFrame(frame);
         handlersRef.current.onFrame?.(frame);
       },
@@ -86,11 +112,8 @@ export function useMarketConnection(handlers: MarketConnectionHandlers = {}): vo
     // WebSocket upgrade failure — which makes a broken deployment much faster to
     // diagnose.
     const controller = new AbortController();
-    fetch(`${API_URL}/api/symbol`, { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((info: { symbol: string; priceScale: number; qtyScale: number; intervals: string[] }) => {
-        useMarketStore.getState().setSymbolInfo(info);
-      })
+    fetchSymbolInfo(controller.signal)
+      .then((info) => useMarketStore.getState().setSymbolInfo(info))
       .catch(() => {
         // The socket is the primary path; a failed metadata fetch is not fatal.
       });
@@ -98,6 +121,7 @@ export function useMarketConnection(handlers: MarketConnectionHandlers = {}): vo
     return () => {
       controller.abort();
       client.dispose();
+      book.dispose();
       useMarketStore.getState().setClient(null);
     };
   }, []);

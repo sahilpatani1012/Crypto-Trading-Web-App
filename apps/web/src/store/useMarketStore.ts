@@ -23,18 +23,21 @@
 
 import { create } from 'zustand';
 import {
+  BOOK_DISPLAY_DEPTH,
   DEFAULT_INTERVAL,
   PRICE_SCALE,
   QTY_SCALE,
   SYMBOL,
   TAPE_LENGTH,
   type IntervalId,
+  type Level,
   type Tier,
   type TierFrame,
   type Trade,
 } from '@cta/protocol';
 
 import type { ConnectionStatus, SocketClient } from '@/lib/net/socket-client';
+import type { BookStats, BookSyncState } from '@/lib/market/order-book-store';
 
 export interface MarketState {
   // --- connection -----------------------------------------------------------
@@ -58,6 +61,15 @@ export interface MarketState {
   lastUpdateAt: number | null;
   tape: Trade[];
   tapeDropped: number;
+
+  // --- order book -----------------------------------------------------------
+  /** Top levels only. The full book lives in OrderBookStore, outside React. */
+  bids: Level[];
+  asks: Level[];
+  bookState: BookSyncState;
+  bookSeq: number;
+  bookGaps: number;
+  bookResyncs: number;
 
   // --- delivery -------------------------------------------------------------
   tier: TierFrame | null;
@@ -83,6 +95,7 @@ export interface MarketActions {
   setNetStats: (stats: { latencyMs: number; jitterMs: number; measuredHz: number }) => void;
   pushTrades: (trades: Trade[], dropped: number, at: number) => void;
   setLastPrice: (price: number, at: number) => void;
+  setBook: (bids: Level[], asks: Level[], stats: BookStats) => void;
   noteMalformed: () => void;
   setInterval: (interval: IntervalId) => void;
   setClient: (client: SocketClient | null) => void;
@@ -105,6 +118,13 @@ const initial: MarketState = {
   lastUpdateAt: null,
   tape: [],
   tapeDropped: 0,
+
+  bids: [],
+  asks: [],
+  bookState: 'idle',
+  bookSeq: 0,
+  bookGaps: 0,
+  bookResyncs: 0,
 
   tier: null,
   latencyMs: 0,
@@ -158,6 +178,17 @@ export const useMarketStore = create<MarketState & MarketActions>((set) => ({
         : { previousPrice: state.lastPrice, lastPrice: price, lastUpdateAt: at },
     ),
 
+  setBook: (bids, asks, stats) =>
+    set({
+      bids,
+      asks,
+      bookState: stats.state,
+      bookSeq: stats.lastSeq,
+      bookGaps: stats.gaps,
+      // The initial fetch is not a resync, so it is not counted as one.
+      bookResyncs: Math.max(0, stats.snapshots - 1),
+    }),
+
   noteMalformed: () => set((state) => ({ malformedFrames: state.malformedFrames + 1 })),
 
   setInterval: (interval) => set({ interval }),
@@ -177,6 +208,8 @@ export const useMarketStore = create<MarketState & MarketActions>((set) => ({
       lastUpdateAt: null,
       tape: [],
       tapeDropped: 0,
+      bids: [],
+      asks: [],
     }),
 }));
 
@@ -202,3 +235,12 @@ export const selectPriceDirection = (s: MarketState): 'up' | 'down' | 'flat' => 
 };
 
 export const selectActiveTier = (s: MarketState): Tier | null => s.tier?.active ?? null;
+
+export const selectSpread = (s: MarketState): number | null => {
+  const bestBid = s.bids[0]?.[0];
+  const bestAsk = s.asks[0]?.[0];
+  if (bestBid === undefined || bestAsk === undefined) return null;
+  return bestAsk - bestBid;
+};
+
+export const BOOK_ROWS = BOOK_DISPLAY_DEPTH;
