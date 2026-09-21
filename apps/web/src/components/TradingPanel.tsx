@@ -8,8 +8,15 @@
  * `useMarketConnection` exactly once; every child reads from the store through
  * selectors and knows nothing about sockets.
  *
- * The chart and the order book join in S5 and S6, hanging their refetch off the
- * `onResync` callback already wired here.
+ * ## Layout
+ *
+ * Arranged by how often each thing is looked at. Connection status and price sit in
+ * the header because they are glanced at constantly. The chart dominates. The tier
+ * panel sits directly *under* the chart rather than off to one side, because the
+ * whole point of that feature is watching a tier change affect the chart — the two
+ * have to be in view together, especially on camera. The book and the tape are
+ * narrow lists, so they share the sidebar, and everything collapses to one column
+ * below `lg`.
  */
 
 import { useCallback, useRef } from 'react';
@@ -19,6 +26,7 @@ import { useMarketConnection } from '@/hooks/useMarketConnection';
 import { useMarketStore, selectStale } from '@/store/useMarketStore';
 import { CandleChart, type CandleChartHandle } from './CandleChart';
 import { ConnectionBanner } from './ConnectionBanner';
+import { ConnectionStatus } from './ConnectionStatus';
 import { OrderBook } from './OrderBook';
 import { PriceHeader } from './PriceHeader';
 import { TierPanel } from './TierPanel';
@@ -43,21 +51,27 @@ export function TradingPanel() {
   useMarketConnection({ onResync: handleResync, onFrame: handleFrame });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <ConnectionBanner />
 
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <PriceHeader />
+      <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="flex flex-col items-start gap-2">
+          <ConnectionStatus />
+          <PriceHeader />
+        </div>
         <IntervalSelector />
-      </div>
+      </header>
 
-      <CandleChart ref={chartRef} />
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
+          <CandleChart ref={chartRef} />
+          <TierPanel />
+        </div>
 
-      <TierPanel />
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <OrderBook />
-        <TradeTape />
+        <div className="space-y-4">
+          <OrderBook />
+          <TradeTape />
+        </div>
       </div>
     </div>
   );
@@ -86,7 +100,7 @@ function IntervalSelector() {
           disabled={stale}
           aria-pressed={interval === id}
           onClick={() => choose(id)}
-          className={`num rounded border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+          className={`num rounded border px-3 py-1.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40 ${
             interval === id
               ? 'border-accent bg-accent/15 text-ink'
               : 'border-line bg-surface-2 text-ink-dim hover:border-accent hover:text-ink'

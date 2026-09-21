@@ -98,8 +98,24 @@ const COLORS = {
   crosshair: '#4c8dff',
 };
 
-export const CandleChart = forwardRef<CandleChartHandle, { height?: number }>(
-  function CandleChart({ height = 380 }, ref) {
+/**
+ * Height is set in CSS, not JavaScript.
+ *
+ * A fixed pixel height would take most of a phone screen, and the obvious
+ * alternative — a `useMediaQuery` hook — adds state, a render, and an SSR mismatch
+ * risk for something the stylesheet already knows how to express. Instead the
+ * container carries responsive height classes and the ResizeObserver applies
+ * whatever the browser computed, for both dimensions.
+ */
+const CONTAINER_CLASS = 'w-full h-[240px] sm:h-[320px] lg:h-[420px]';
+
+export interface CandleChartProps {
+  /** Extra classes on the outer section, for layout by the parent. */
+  className?: string;
+}
+
+export const CandleChart = forwardRef<CandleChartHandle, CandleChartProps>(
+  function CandleChart({ className = '' }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -133,7 +149,7 @@ export const CandleChart = forwardRef<CandleChartHandle, { height?: number }>(
 
       const chart = createChart(container, {
         width: container.clientWidth,
-        height,
+        height: container.clientHeight,
         layout: {
           background: { color: COLORS.background },
           textColor: COLORS.text,
@@ -213,8 +229,9 @@ export const CandleChart = forwardRef<CandleChartHandle, { height?: number }>(
       // The chart does not resize itself. Without this it keeps its initial width
       // forever, which on a responsive layout means it is wrong immediately.
       const observer = new ResizeObserver((entries) => {
-        const width = entries[0]?.contentRect.width;
-        if (width !== undefined && width > 0) chart.applyOptions({ width });
+        const box = entries[0]?.contentRect;
+        if (box === undefined || box.width <= 0 || box.height <= 0) return;
+        chart.applyOptions({ width: box.width, height: box.height });
       });
       observer.observe(container);
 
@@ -228,7 +245,7 @@ export const CandleChart = forwardRef<CandleChartHandle, { height?: number }>(
         chartRef.current = null;
         seriesRef.current = null;
       };
-    }, [height]);
+    }, []);
 
     // -----------------------------------------------------------------------
     // History
@@ -345,7 +362,7 @@ export const CandleChart = forwardRef<CandleChartHandle, { height?: number }>(
     // -----------------------------------------------------------------------
 
     return (
-      <section className="rounded-lg border border-line-soft bg-surface-1 p-4">
+      <section className={`rounded-lg border border-line-soft bg-surface-1 p-4 ${className}`}>
         <div className="mb-2 flex min-h-[1.5rem] flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <h2 className="text-xs uppercase tracking-wider text-ink-faint">
             Chart · {intervalRef.current}
@@ -374,7 +391,7 @@ export const CandleChart = forwardRef<CandleChartHandle, { height?: number }>(
         </div>
 
         <div className="relative">
-          <div ref={containerRef} className="w-full" style={{ height }} />
+          <div ref={containerRef} className={CONTAINER_CLASS} />
 
           {state !== 'ready' && (
             <div className="absolute inset-0 flex items-center justify-center bg-surface-1/80 text-sm text-ink-dim">

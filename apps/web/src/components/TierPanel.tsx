@@ -74,7 +74,7 @@ export function TierPanel() {
             type="button"
             disabled={stale}
             onClick={() => client?.forceTier(t)}
-            className={`rounded border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`rounded border px-3 py-1.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40 ${
               forced && tier?.active === t
                 ? 'border-accent bg-accent/15 text-ink'
                 : 'border-line bg-surface-2 text-ink-dim hover:border-accent hover:text-ink'
@@ -87,7 +87,7 @@ export function TierPanel() {
           type="button"
           disabled={stale}
           onClick={() => client?.forceTier(null)}
-          className={`rounded border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+          className={`rounded border px-3 py-1.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40 ${
             tier !== null && !forced
               ? 'border-accent bg-accent/15 text-ink'
               : 'border-line bg-surface-2 text-ink-dim hover:border-accent hover:text-ink'

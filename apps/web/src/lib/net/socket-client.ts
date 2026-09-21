@@ -105,6 +105,17 @@ export interface SocketClientOptions extends SocketClientEvents {
 
 const OPEN = 1;
 
+/**
+ * Floor on how often network stats are pushed out.
+ *
+ * They were previously emitted on every candle frame, which at `full` tier is ten
+ * times a second — so the tier panel re-rendered ten times a second to display a
+ * *rate*, a number that is an average and cannot be read at that speed anyway. The
+ * chart already bypasses React; this was the one place a machine-rate value was
+ * still driving a React subtree.
+ */
+const STATS_EMIT_INTERVAL_MS = 1_000;
+
 export class SocketClient {
   private readonly opts: SocketClientOptions;
   private readonly now: () => number;
@@ -119,6 +130,7 @@ export class SocketClient {
   private retryAt: number | null = null;
   private pingId = 0;
   private lastPongAt = 0;
+  private lastStatsEmitAt = 0;
 
   private readonly latency = new LatencyMeter();
   private readonly rate = new RateMeter(RATE_WINDOW_MS);
@@ -268,6 +280,7 @@ export class SocketClient {
     // longer exists.
     this.latency.reset();
     this.rate.reset();
+    this.lastStatsEmitAt = 0;
 
     this.setStatus('open');
     this.send({ t: 'subscribe', symbol: this.opts.symbol, interval: this.interval });
@@ -463,6 +476,8 @@ export class SocketClient {
   }
 
   private emitNetStats(now: number): void {
+    if (now - this.lastStatsEmitAt < STATS_EMIT_INTERVAL_MS) return;
+    this.lastStatsEmitAt = now;
     this.opts.onNetStats?.({ ...this.latency.stats(), measuredHz: this.rate.ratePerSecond(now) });
   }
 }

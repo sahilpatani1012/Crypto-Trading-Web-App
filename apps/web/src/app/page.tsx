@@ -11,7 +11,7 @@ import { TradingPanel } from '@/components/TradingPanel';
  */
 export default function Page() {
   return (
-    <main className="mx-auto min-h-screen w-full max-w-5xl px-4 py-8 sm:py-12">
+    <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-6 sm:py-8">
       <header className="mb-6">
         <h1 className="sr-only">{SYMBOL} adaptive trading terminal</h1>
         <p className="text-xs uppercase tracking-[0.2em] text-ink-faint">

@@ -8,6 +8,9 @@
  * context — but they are dimmed and this banner says plainly that they are not
  * live, and how old they are.
  *
+ * Paired with `ConnectionStatus`, which is the always-on compact pill. This one is
+ * the interruption: prominent, and only when the data can no longer be trusted.
+ *
  * Showing cached values as though they were current is the one option that is worse
  * than showing nothing. A blank screen is unhelpful; a stale price presented as live
  * is a lie someone might act on.
