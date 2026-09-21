@@ -194,6 +194,47 @@ export const JITTER_DIVISOR = 16;
 export const RATE_WINDOW_MS = 3_000;
 
 // ---------------------------------------------------------------------------
+// Client reconnection
+// ---------------------------------------------------------------------------
+
+/**
+ * Silence from the server that the client treats as a dead connection.
+ *
+ * Three missed pings. This exists because a TCP connection can be half-open: a
+ * router reboots, a laptop lid closes, a phone enters a tunnel, and the peer
+ * vanishes without ever sending a close frame. `readyState` stays OPEN, `onclose`
+ * never fires, and the UI would show a frozen price forever. The only way to find
+ * out is to send something and notice that nothing comes back.
+ */
+export const HEARTBEAT_TIMEOUT_MS = 6_000;
+
+/** First reconnect delay. Doubles per attempt up to the cap. */
+export const RECONNECT_BASE_MS = 500;
+
+/** Ceiling on reconnect delay, so a long outage settles at a steady retry rate. */
+export const RECONNECT_CAP_MS = 15_000;
+
+/**
+ * Reconnect delay with equal jitter: half the backoff is deterministic, half is
+ * random.
+ *
+ * Exponential backoff alone does not solve a thundering herd. If a server restarts
+ * and every client sees `onclose` in the same instant, they all wait 500 ms, then
+ * all wait 1 s, then all wait 2 s — the waves get slower but they are still waves,
+ * and each one can knock the recovering server back down. The randomness is the
+ * part that actually spreads the load.
+ *
+ * Half the delay is kept deterministic rather than using full jitter
+ * (`random(0, base)`) so there is always a real minimum wait. Full jitter can
+ * produce a 5 ms retry, which for a single client is indistinguishable from
+ * hammering.
+ */
+export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
+  const base = Math.min(RECONNECT_BASE_MS * 2 ** Math.max(0, attempt), RECONNECT_CAP_MS);
+  return Math.round(base / 2 + random() * (base / 2));
+}
+
+// ---------------------------------------------------------------------------
 // Delivery limits
 // ---------------------------------------------------------------------------
 
